@@ -4,6 +4,9 @@ import os
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Settings(BaseSettings):
     # Kraken
@@ -17,11 +20,16 @@ class Settings(BaseSettings):
     TELEGRAM_API_ID: Optional[int] = Field(default=None, description="Telegram API ID")
     TELEGRAM_API_HASH: Optional[str] = Field(default=None, description="Telegram API hash")
     TELEGRAM_BOT_TOKEN: Optional[str] = Field(default=None, description="Telegram bot token")
-    TELEGRAM_CHANNEL_ID: str = Field(default="", description="Telegram channel id or @handle")
+    TELEGRAM_CHANNEL_ID: str = Field(default="", description="Telegram channel id or @handle for live trades")
+    TELEGRAM_DRY_RUN_CHANNEL_ID: str = Field(default="", description="Telegram channel id for dry-run trades")
 
     # Trading
-    DRY_RUN: bool = True
+    DRY_RUN: bool = os.getenv('DRY_RUN') == 'true'
     MAX_POSITION_SIZE_PERCENT: float = 5.0
+    ORDER_SIZE_USD: float = Field(
+        default=0.0,
+        description="Fixed order size in quote currency (e.g., USDC). If > 0, this overrides MAX_POSITION_SIZE_PERCENT."
+    )
     MIN_CONFIDENCE_THRESHOLD: int = 80
     MAX_DAILY_TRADES: int = 10
 
@@ -33,6 +41,16 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "extra": "ignore"
     }
+
+    def model_post_init(self, __context: any) -> None:
+        """
+        Deze methode wordt aangeroepen nadat Pydantic de instellingen heeft geladen.
+        We gebruiken het om de TELEGRAM_CHANNEL_ID conditioneel in te stellen.
+        """
+        if self.DRY_RUN and self.TELEGRAM_DRY_RUN_CHANNEL_ID:
+            print("DRY_RUN is ingeschakeld. Schakelen naar test Telegram-kanaal.")
+            self.TELEGRAM_CHANNEL_ID = self.TELEGRAM_DRY_RUN_CHANNEL_ID
+        return super().model_post_init(__context)
 
     @field_validator("MIN_CONFIDENCE_THRESHOLD")
     @classmethod

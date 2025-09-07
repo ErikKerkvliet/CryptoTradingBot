@@ -15,11 +15,15 @@ class SignalAnalyzer:
     """
 
     PROMPT_TEMPLATE = (
-        "Parse the following trading signal into JSON with keys: action (BUY/SELL), base_currency, "
-        "quote_currency, entry_price or entry_price_range (list), take_profit_levels (list), stop_loss, "
-        "leverage (optional), confidence (0-100). The 'confidence' field should represent the LLM's own "
-        "estimate of how confident it is that the parsed information is correct. If a field is not present, use null. "
-        "Return only valid JSON.\n\n"
+        "Parse the following trading signal into a valid JSON object. Use the following keys: "
+        "action (BUY/SELL), base_currency, quote_currency, entry_price or entry_price_range (list), "
+        "take_profit_levels (list), stop_loss, leverage (optional), and confidence (0-100).\n\n"
+        "**Important Rules:**\n"
+        "1. For 'base_currency' and 'quote_currency', you MUST map any currency name to its official ticker "
+        "symbol as used by the Kraken exchange (e.g., Bitcoin must be 'XBT', Ethereum must be 'ETH', Solana must be 'SOL').\n"
+        "2. The 'confidence' field must be your own integer estimate (0-100) of how accurately you parsed the signal.\n"
+        "3. If any field (except for the required ones) is not present in the signal, its value in the JSON must be null.\n\n"
+        "Return only the raw JSON object and nothing else.\n\n"
     )
 
     def __init__(self, openai_api_key: str):

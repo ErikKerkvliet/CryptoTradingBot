@@ -19,7 +19,12 @@ from src.utils.logger import setup_logger
 from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
 from src.pair_validator import PairValidator
-from src.kraken_trader import KrakenTrader
+
+if settings.DRY_RUN:
+    from src.dry_run.trader import DryRunTrader
+else:
+    from src.kraken_trader import KrakenTrader
+
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
 
 logger = setup_logger(level=settings.LOG_LEVEL)
@@ -30,11 +35,19 @@ class TradingApp:
         self.logger = logger
         self.analyzer = SignalAnalyzer(settings.OPENAI_API_KEY)
         self.validator = PairValidator()
-        self.trader = KrakenTrader(
-            settings.KRAKEN_API_KEY,
-            settings.KRAKEN_API_SECRET,
-            dry_run=settings.DRY_RUN
-        )
+
+        if self.settings.DRY_RUN:
+            self.trader = DryRunTrader(
+                settings.KRAKEN_API_KEY,
+                settings.KRAKEN_API_SECRET
+            )
+        else:
+            self.trader = KrakenTrader(
+                settings.KRAKEN_API_KEY,
+                settings.KRAKEN_API_SECRET,
+                dry_run=self.settings.DRY_RUN
+            )
+
         self.telegram = TelegramMonitor(
             settings.TELEGRAM_API_ID,
             settings.TELEGRAM_API_HASH,
@@ -86,13 +99,28 @@ class TradingApp:
         try:
             balances = await self.trader.get_balance()
             self.logger.info(f"Current balances: {balances}")
-
             quote_balance = balances.get(quote) or balances.get(quote + "S") or 0.0
-            max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
-            order_value = quote_balance * max_pct
+
+            # Check if a fixed order size is set in the settings
+            if self.settings.ORDER_SIZE_USD > 0:
+                order_value = self.settings.ORDER_SIZE_USD
+                self.logger.info(f"Using fixed order size from settings: {order_value} {quote}")
+            else:
+                # If not, fall back to the percentage-based calculation
+                max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
+                order_value = quote_balance * max_pct
+                self.logger.info(
+                    f"Calculating order size based on {self.settings.MAX_POSITION_SIZE_PERCENT}% of balance.")
+
+            # Safety check: ensure the calculated order value does not exceed available balance
+            if order_value > quote_balance:
+                self.logger.warning(
+                    f"Order value of {order_value:.2f} {quote} exceeds available balance of {quote_balance:.2f}. Skipping trade.")
+                return
 
             if order_value <= 0:
-                self.logger.warning(f"No available balance for trading. {quote} balance: {quote_balance}")
+                self.logger.warning(
+                    f"Order value is {order_value:.2f}. Must be positive to place a trade. {quote} balance: {quote_balance:.2f}")
                 return
 
             # approximate volume

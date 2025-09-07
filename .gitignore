@@ -1,5 +1,6 @@
 .env
-.idea
+*.idea
+*.db
 sessions/
 *.session
 *.session-journal
