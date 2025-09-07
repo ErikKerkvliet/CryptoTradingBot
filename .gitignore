@@ -1,2 +1,6 @@
 .env
 .idea
+sessions/
+*.session
+*.session-journal
+trading_bot.log*

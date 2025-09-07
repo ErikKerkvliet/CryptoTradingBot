@@ -1,6 +1,20 @@
 """Main application entrypoint orchestrating all components."""
 import asyncio
-from config.settings import settings
+import sys
+import os
+
+# Ensure we can import from the project root
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from config.settings import settings
+    # Validate that all required fields are present
+    settings.validate_required_fields()
+except Exception as e:
+    print(f"❌ Configuration error: {e}")
+    print("Please check your .env file and ensure all required variables are set.")
+    sys.exit(1)
+
 from src.utils.logger import setup_logger
 from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
@@ -16,18 +30,30 @@ class TradingApp:
         self.logger = logger
         self.analyzer = SignalAnalyzer(settings.OPENAI_API_KEY)
         self.validator = PairValidator()
-        self.trader = KrakenTrader(settings.KRAKEN_API_KEY,
-        settings.KRAKEN_API_SECRET, dry_run=settings.DRY_RUN)
-        self.telegram = TelegramMonitor(settings.TELEGRAM_API_ID,
-        settings.TELEGRAM_API_HASH, settings.TELEGRAM_CHANNEL_ID, self.logger)
+        self.trader = KrakenTrader(
+            settings.KRAKEN_API_KEY,
+            settings.KRAKEN_API_SECRET,
+            dry_run=settings.DRY_RUN
+        )
+        self.telegram = TelegramMonitor(
+            settings.TELEGRAM_API_ID,
+            settings.TELEGRAM_API_HASH,
+            settings.TELEGRAM_CHANNEL_ID,
+            self.logger
+        )
         self.daily_trades = 0
 
     async def on_message(self, message: str):
+        self.logger.info(f"Processing message: {message[:100]}...")
+
         try:
             parsed = await self.analyzer.analyze(message)
             self.logger.info(f"Parsed signal: {parsed}")
-        except SignalParseError:
-            self.logger.warning("Could not parse signal")
+        except SignalParseError as e:
+            self.logger.warning(f"Could not parse signal: {e}")
+            return
+        except Exception as e:
+            self.logger.error(f"Unexpected error in signal analysis: {e}")
             return
 
         conf = parsed.get("confidence", 0) or 0
@@ -42,48 +68,75 @@ class TradingApp:
         base = parsed.get("base_currency")
         quote = parsed.get("quote_currency") or "USDC"
 
+        if not base:
+            self.logger.warning("No base currency found in signal")
+            return
+
         try:
             base, quote = await self.validator.validate_and_convert(base, quote)
-        except PairNotFoundError:
-            self.logger.warning("Pair not available on Kraken")
+            self.logger.info(f"Validated pair: {base}/{quote}")
+        except PairNotFoundError as e:
+            self.logger.warning(f"Pair not available on Kraken: {e}")
+            return
+        except Exception as e:
+            self.logger.error(f"Error validating pair: {e}")
             return
 
         # compute position size
-        balances = await self.trader.get_balance()
-        quote_balance = balances.get(quote) or balances.get(quote + "S") or 0.0
-        max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
-        # simple allocation: use max_pct of quote balance
-        order_value = quote_balance * max_pct
-        if order_value <= 0:
-            self.logger.warning("No available balance for trading")
-            return
-
-        # approximate volume: if entry price present, use it; else require market order and estimate
-        entry = parsed.get("entry_price")
-        if entry is None and parsed.get("entry_price_range"):
-            entry = sum(parsed.get("entry_price_range")) / 2.0
-        if entry is None:
-            # market order: we will place market and volume based on available funds and market price (not implemented: fetch ticker)
-            self.logger.info("No entry given; placing market order using estimated market price")
-
-        volume = order_value / max(1e-8, (entry or 1.0))
-        pair_str = f"{base}/{quote}"
-        # note: mapping to Kraken altname is done by PairValidator - here we supply altname as pair_str is fine if Kraken accepts wsname
-        side = "buy" if parsed.get("action") == "BUY" else "sell"
         try:
-            # simple market order
-            res = await self.trader.place_order(pair_str, side.upper(), volume,
-            ordertype=("limit" if entry else "market"), price=entry)
+            balances = await self.trader.get_balance()
+            self.logger.info(f"Current balances: {balances}")
+
+            quote_balance = balances.get(quote) or balances.get(quote + "S") or 0.0
+            max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
+            order_value = quote_balance * max_pct
+
+            if order_value <= 0:
+                self.logger.warning(f"No available balance for trading. {quote} balance: {quote_balance}")
+                return
+
+            # approximate volume
+            entry = parsed.get("entry_price")
+            if entry is None and parsed.get("entry_price_range"):
+                entry = sum(parsed.get("entry_price_range")) / 2.0
+            if entry is None:
+                self.logger.info("No entry given; placing market order using estimated market price")
+                entry = 1.0  # fallback
+
+            volume = order_value / max(1e-8, entry)
+            pair_str = f"{base}/{quote}"
+            side = "buy" if parsed.get("action") == "BUY" else "sell"
+
+            self.logger.info(f"Placing order: {side} {volume} {pair_str} at {entry}")
+
+            res = await self.trader.place_order(
+                pair_str,
+                side.upper(),
+                volume,
+                ordertype=("limit" if parsed.get("entry_price") else "market"),
+                price=entry if parsed.get("entry_price") else None
+            )
+
             self.logger.info(f"Order result: {res}")
+
             if not self.settings.DRY_RUN:
                 self.daily_trades += 1
-        except InsufficientBalanceError:
-            self.logger.warning("Insufficient balance to place order")
-        except Exception:
-            self.logger.exception("Order failed")
+
+        except InsufficientBalanceError as e:
+            self.logger.warning(f"Insufficient balance to place order: {e}")
+        except Exception as e:
+            self.logger.exception(f"Order failed: {e}")
 
     async def run(self):
-        await self.telegram.start(self.on_message)
+        self.logger.info("Starting trading application...")
+        self.logger.info(f"Settings: DRY_RUN={self.settings.DRY_RUN}, "
+                        f"Channel={self.settings.TELEGRAM_CHANNEL_ID}, "
+                        f"Max trades={self.settings.MAX_DAILY_TRADES}")
+
+        try:
+            await self.telegram.start(self.on_message)
+        except Exception as e:
+            self.logger.exception(f"Error starting telegram monitor: {e}")
 
 if __name__ == "__main__":
     app = TradingApp()
@@ -91,3 +144,5 @@ if __name__ == "__main__":
         asyncio.run(app.run())
     except KeyboardInterrupt:
         logger.info("Shutting down")
+    except Exception as e:
+        logger.exception(f"Application error: {e}")

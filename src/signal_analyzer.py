@@ -1,9 +1,10 @@
 """SignalAnalyzer uses OpenAI to parse text signals into structured objects."""
 from __future__ import annotations
 from typing import Dict, Any, Optional, List, Union
-import openai
+from openai import OpenAI
 import asyncio
 import re
+import json
 from .utils.exceptions import SignalParseError
 
 
@@ -16,20 +17,21 @@ class SignalAnalyzer:
     PROMPT_TEMPLATE = (
         "Parse the following trading signal into JSON with keys: action (BUY/SELL), base_currency, "
         "quote_currency, entry_price or entry_price_range (list), take_profit_levels (list), stop_loss, "
-        "leverage (optional), confidence (0-100). If a field is not present, use null. Return only valid JSON.\n\n"
+        "leverage (optional), confidence (0-100). The 'confidence' field should represent the LLM's own "
+        "estimate of how confident it is that the parsed information is correct. If a field is not present, use null. "
+        "Return only valid JSON.\n\n"
     )
 
     def __init__(self, openai_api_key: str):
-        openai.api_key = openai_api_key
+        self.client = OpenAI(api_key=openai_api_key)
 
     async def analyze(self, message: str) -> Dict[str, Any]:
         # Fast heuristic attempt first (regex). If low-confidence or ambiguous, fall back to OpenAI.
         result = self._regex_parse(message)
         if result and result.get("confidence", 0) >= 85:
             return result
-        # else call OpenAI (sync call run in executor)
-        loop = asyncio.get_event_loop()
-        parsed = await loop.run_in_executor(None, self._call_openai, message)
+        # else call OpenAI (async call)
+        parsed = await self._call_openai(message)
         if not parsed:
             raise SignalParseError("Failed to parse signal")
         return parsed
@@ -104,24 +106,30 @@ class SignalAnalyzer:
             return out
         return None
 
-    def _call_openai(self, message: str) -> Optional[Dict[str, Any]]:
+    async def _call_openai(self, message: str) -> Optional[Dict[str, Any]]:
         prompt = self.PROMPT_TEMPLATE + "Signal:\n" + message + "\n\nReturn JSON only."
         try:
-            resp = openai.Completion.create(
-                engine="text-davinci-003",
-                prompt=prompt,
-                max_tokens=300,
-                temperature=0,
-                top_p=1,
-                n=1,
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model="gpt-5-nano",
+                    messages=[
+                        {"role": "system", "content": "You are a trading signal parser. Return only valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_completion_tokens=3000,
+                    temperature=1
+                )
             )
-            text = resp.choices[0].text.strip()
+
+            text = response.choices[0].message.content.strip()
             # sometimes returns code block - extract JSON
-            import json
             m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
             if m:
                 text = m.group(1)
             data = json.loads(text)
             return data
-        except Exception:
+        except Exception as e:
+            print(f"OpenAI API error: {e}")
             return None
