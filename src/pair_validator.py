@@ -65,7 +65,8 @@ class PairValidator:
         kraken_quote = self.KRAKEN_NAME_MAPPING.get(quote_upper, quote_upper)
 
         # Step 2: Prefer USDC over USDT. We will try USDC first.
-        preferred_quote = "USDC" if kraken_quote == "USDT" else kraken_quote
+        # preferred_quote = "USDC" if kraken_quote == "USDT" else kraken_quote
+        preferred_quote = "EUR"
 
         all_pairs = await self.fetch_pairs()
 

@@ -19,8 +19,7 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: Optional[str] = None
 
     # Channel IDs
-    TELEGRAM_CHANNEL_BUY_ID: Optional[str] = None
-    TELEGRAM_CHANNEL_SELL_ID: Optional[str] = None
+    TELEGRAM_CHANNEL_ID: Optional[str] = None
     TELEGRAM_DRY_RUN_CHANNEL_ID: Optional[str] = None
 
     # Trading Configuration
@@ -47,7 +46,7 @@ class Settings(BaseSettings):
         if self.DRY_RUN:
             raw_channels = [self.TELEGRAM_DRY_RUN_CHANNEL_ID]
         else:
-            raw_channels = [self.TELEGRAM_CHANNEL_BUY_ID, self.TELEGRAM_CHANNEL_SELL_ID]
+            raw_channels = [self.TELEGRAM_CHANNEL_ID]
 
         for channel in raw_channels:
             if channel:
@@ -69,13 +68,9 @@ class Settings(BaseSettings):
                     "Missing required environment variable: TELEGRAM_DRY_RUN_CHANNEL_ID (required when DRY_RUN=true)"
                 )
         else:
-            if not self.TELEGRAM_CHANNEL_BUY_ID:
+            if not self.TELEGRAM_CHANNEL_ID:
                 raise ValueError(
-                    "Missing required environment variable: TELEGRAM_CHANNEL_BUY_ID (required when DRY_RUN=false)"
-                )
-            if not self.TELEGRAM_CHANNEL_SELL_ID:
-                raise ValueError(
-                    "Missing required environment variable: TELEGRAM_CHANNEL_SELL_ID (required when DRY_RUN=false)"
+                    "Missing required environment variable: TELEGRAM_CHANNEL_ID (required when DRY_RUN=false)"
                 )
 
 settings = Settings()
