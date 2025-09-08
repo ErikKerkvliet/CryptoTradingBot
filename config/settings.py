@@ -1,89 +1,81 @@
-"""Application settings and configuration loader."""
+"""Loads and validates application settings from a .env file."""
 from __future__ import annotations
-import os
+from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator
-from typing import Optional
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class Settings(BaseSettings):
-    # Kraken
-    KRAKEN_API_KEY: str = Field(default="", description="Kraken API key")
-    KRAKEN_API_SECRET: str = Field(default="", description="Kraken API secret")
+    """Defines the application's configuration settings."""
 
-    # OpenAI
-    OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
+    # Kraken API
+    KRAKEN_API_KEY: str
+    KRAKEN_API_SECRET: str
 
-    # Telegram
-    TELEGRAM_API_ID: Optional[int] = Field(default=None, description="Telegram API ID")
-    TELEGRAM_API_HASH: Optional[str] = Field(default=None, description="Telegram API hash")
-    TELEGRAM_BOT_TOKEN: Optional[str] = Field(default=None, description="Telegram bot token")
-    TELEGRAM_CHANNEL_ID: str = Field(default="", description="Telegram channel id or @handle for live trades")
-    TELEGRAM_DRY_RUN_CHANNEL_ID: str = Field(default="", description="Telegram channel id for dry-run trades")
+    # OpenAI API
+    OPENAI_API_KEY: str
 
-    # Trading
-    DRY_RUN: bool = os.getenv('DRY_RUN') == 'true'
+    # Telegram API
+    TELEGRAM_API_ID: int
+    TELEGRAM_API_HASH: str
+    TELEGRAM_BOT_TOKEN: Optional[str] = None
+
+    # Channel IDs
+    TELEGRAM_CHANNEL_BUY_ID: Optional[str] = None
+    TELEGRAM_CHANNEL_SELL_ID: Optional[str] = None
+    TELEGRAM_DRY_RUN_CHANNEL_ID: Optional[str] = None
+
+    # Trading Configuration
+    DRY_RUN: bool = True
     MAX_POSITION_SIZE_PERCENT: float = 5.0
-    ORDER_SIZE_USD: float = Field(
-        default=0.0,
-        description="Fixed order size in quote currency (e.g., USDC). If > 0, this overrides MAX_POSITION_SIZE_PERCENT."
-    )
+    ORDER_SIZE_USD: float = 0.0
     MIN_CONFIDENCE_THRESHOLD: int = 80
     MAX_DAILY_TRADES: int = 10
 
     # Misc
     LOG_LEVEL: str = "INFO"
 
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "extra": "ignore"
-    }
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
 
-    def model_post_init(self, __context: any) -> None:
+    @property
+    def target_channels(self) -> List[Union[int, str]]:
         """
-        Deze methode wordt aangeroepen nadat Pydantic de instellingen heeft geladen.
-        We gebruiken het om de TELEGRAM_CHANNEL_ID conditioneel in te stellen.
+        Returns a list of channel IDs to monitor based on the DRY_RUN setting.
         """
-        if self.DRY_RUN and self.TELEGRAM_DRY_RUN_CHANNEL_ID:
-            print("DRY_RUN is ingeschakeld. Schakelen naar test Telegram-kanaal.")
-            self.TELEGRAM_CHANNEL_ID = self.TELEGRAM_DRY_RUN_CHANNEL_ID
-        return super().model_post_init(__context)
+        channels = []
+        raw_channels = []
+        if self.DRY_RUN:
+            raw_channels = [self.TELEGRAM_DRY_RUN_CHANNEL_ID]
+        else:
+            raw_channels = [self.TELEGRAM_CHANNEL_BUY_ID, self.TELEGRAM_CHANNEL_SELL_ID]
 
-    @field_validator("MIN_CONFIDENCE_THRESHOLD")
-    @classmethod
-    def validate_confidence(cls, v):
-        if not 0 <= v <= 100:
-            raise ValueError("MIN_CONFIDENCE_THRESHOLD must be between 0 and 100")
-        return v
+        for channel in raw_channels:
+            if channel:
+                try:
+                    # Convert to int if it's a numeric ID (e.g., -100123456)
+                    channels.append(int(channel))
+                except (ValueError, TypeError):
+                    # Otherwise, keep as a string (e.g., a public channel username)
+                    channels.append(channel)
+        return channels
 
     def validate_required_fields(self):
-        """Validate that required fields are present for the bot to work"""
-        missing_fields = []
+        """
+        Validates that the necessary environment variables are set based on the mode.
+        """
+        if self.DRY_RUN:
+            if not self.TELEGRAM_DRY_RUN_CHANNEL_ID:
+                raise ValueError(
+                    "Missing required environment variable: TELEGRAM_DRY_RUN_CHANNEL_ID (required when DRY_RUN=true)"
+                )
+        else:
+            if not self.TELEGRAM_CHANNEL_BUY_ID:
+                raise ValueError(
+                    "Missing required environment variable: TELEGRAM_CHANNEL_BUY_ID (required when DRY_RUN=false)"
+                )
+            if not self.TELEGRAM_CHANNEL_SELL_ID:
+                raise ValueError(
+                    "Missing required environment variable: TELEGRAM_CHANNEL_SELL_ID (required when DRY_RUN=false)"
+                )
 
-        if not self.KRAKEN_API_KEY:
-            missing_fields.append("KRAKEN_API_KEY")
-        if not self.KRAKEN_API_SECRET:
-            missing_fields.append("KRAKEN_API_SECRET")
-        if not self.OPENAI_API_KEY:
-            missing_fields.append("OPENAI_API_KEY")
-        if not self.TELEGRAM_API_ID:
-            missing_fields.append("TELEGRAM_API_ID")
-        if not self.TELEGRAM_API_HASH:
-            missing_fields.append("TELEGRAM_API_HASH")
-        if not self.TELEGRAM_CHANNEL_ID:
-            missing_fields.append("TELEGRAM_CHANNEL_ID")
-
-        if missing_fields:
-            raise ValueError(f"Missing required environment variables: {', '.join(missing_fields)}")
-
-# Create settings instance
-try:
-    settings = Settings()
-except Exception as e:
-    print(f"Error loading settings: {e}")
-    print("Please make sure your .env file exists and contains all required variables.")
-    print("Check .env.example for the required format.")
-    raise
+settings = Settings()

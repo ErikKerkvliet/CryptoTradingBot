@@ -7,17 +7,18 @@ import hashlib
 import base64
 import urllib.parse
 import httpx
-import asyncio
+import re
+from .database import TradingDatabase
 from .utils.exceptions import InsufficientBalanceError
 
 
 class KrakenTrader:
     BASE_URL = "https://api.kraken.com"
 
-    def __init__(self, api_key: str, api_secret: str, dry_run: bool = True):
+    def __init__(self, api_key: str, api_secret: str, db: TradingDatabase):
         self.api_key = api_key
         self.api_secret = api_secret
-        self.dry_run = dry_run
+        self.db = db
         self._client = httpx.AsyncClient(timeout=15)
 
     async def _public(self, path: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -46,27 +47,49 @@ class KrakenTrader:
         url = f"{self.BASE_URL}{url_path}"
         r = await self._client.post(url, data=data, headers=headers)
         r.raise_for_status()
-        return r.json()
+        response_data = r.json()
+        if response_data.get("error"):
+            raise Exception(f"Kraken API error: {response_data['error']}")
+        return response_data
 
     async def get_balance(self) -> Dict[str, float]:
         resp = await self._private("Balance")
-        return {k: float(v) for k, v in resp.get("result", {}).items()}
+        # Kraken prefixes assets with 'Z' or 'X' sometimes, let's normalize them
+        normalized_balances = {}
+        for k, v in resp.get("result", {}).items():
+            # Remove the Z/X prefix and '.S' for staked assets for consistency
+            key = re.sub(r'^[ZX]([A-Z0-9]+)(\.S)?$', r'\1', k)
+            normalized_balances[key] = float(v)
+        return normalized_balances
 
-    async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market", price: Optional[float] = None) -> Dict[str, Any]:
-        """Place an order. pair must be Kraken's asset name like XBTUSDC or
-        ETHUSDC (altname)."""
-        if self.dry_run:
-            return {"status": "dry_run", "pair": pair, "side": side, "volume":
-                volume, "ordertype": ordertype, "price": price}
+    async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market", price: Optional[float] = None, telegram_channel: Optional[str] = None) -> Dict[str, Any]:
+        """Place an order and record it in the database."""
+        kraken_pair = pair.replace("/", "")
+        base_currency, quote_currency = pair.split('/')
+
         data = {
-            "pair": pair,
+            "pair": kraken_pair,
             "type": side.lower(),
             "ordertype": ordertype,
             "volume": str(volume),
         }
         if price is not None and ordertype.lower() == "limit":
             data["price"] = str(price)
+
         resp = await self._private("AddOrder", data)
+
+        # Record the trade in the live database
+        trade_data = {
+            "base_currency": base_currency,
+            "quote_currency": quote_currency,
+            "side": side,
+            "volume": volume,
+            "price": price,
+            "ordertype": ordertype,
+            "telegram_channel": telegram_channel,
+            "status": "submitted"  # Or parse from response
+        }
+        self.db.add_trade(trade_data)
         return resp
 
     async def close(self):

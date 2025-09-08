@@ -1,5 +1,3 @@
-# src/dry_run/trader.py
-
 """Simulates a Kraken trader for dry-run mode."""
 from typing import Dict, Any, Optional
 import httpx
@@ -41,16 +39,16 @@ class DryRunTrader:
             return 1.0  # Fallback price
 
     async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
-                          price: Optional[float] = None) -> Dict[str, Any]:
+                          price: Optional[float] = None, telegram_channel: Optional[str] = None) -> Dict[str, Any]:
         """Simulate placing an order and record it in the database."""
         balances = self.wallet.get_balance()
         base_currency, quote_currency = pair.split('/')
 
         if ordertype == "market" and price is None:
-            pair = pair.replace("/", "")
-            price = await self.get_market_price(pair)
+            kraken_pair = pair.replace("/", "")
+            price = await self.get_market_price(kraken_pair)
 
-        cost = volume * price if price else volume * await self.get_market_price(pair)
+        cost = volume * price if price else 0
 
         if side.lower() == "buy":
             if balances.get(quote_currency, 0) < cost:
@@ -68,11 +66,13 @@ class DryRunTrader:
             self.wallet.update_balance(quote_currency, balances.get(quote_currency, 0) + cost)
 
         trade_data = {
-            "pair": pair,
+            "base_currency": base_currency,
+            "quote_currency": quote_currency,
             "side": side,
             "volume": volume,
             "price": price,
             "ordertype": ordertype,
+            "telegram_channel": telegram_channel
         }
         self.db.add_trade(trade_data)
 

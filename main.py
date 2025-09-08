@@ -20,9 +20,11 @@ from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
 from src.pair_validator import PairValidator
 
+# Conditional imports based on DRY_RUN setting
 if settings.DRY_RUN:
     from src.dry_run.trader import DryRunTrader
 else:
+    from src.database import TradingDatabase
     from src.kraken_trader import KrakenTrader
 
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
@@ -35,29 +37,34 @@ class TradingApp:
         self.logger = logger
         self.analyzer = SignalAnalyzer(settings.OPENAI_API_KEY)
         self.validator = PairValidator()
+        self.db = None
+        self.trader = None
 
         if self.settings.DRY_RUN:
+            self.logger.info("🤖 Starting in DRY RUN mode. No real trades will be executed.")
             self.trader = DryRunTrader(
                 settings.KRAKEN_API_KEY,
                 settings.KRAKEN_API_SECRET
             )
         else:
+            self.logger.info("⚡ Starting in LIVE TRADING mode. Real trades will be executed.")
+            self.db = TradingDatabase()
             self.trader = KrakenTrader(
                 settings.KRAKEN_API_KEY,
                 settings.KRAKEN_API_SECRET,
-                dry_run=self.settings.DRY_RUN
+                self.db
             )
 
         self.telegram = TelegramMonitor(
             settings.TELEGRAM_API_ID,
             settings.TELEGRAM_API_HASH,
-            settings.TELEGRAM_CHANNEL_ID,
+            settings.target_channels,
             self.logger
         )
         self.daily_trades = 0
 
-    async def on_message(self, message: str):
-        self.logger.info(f"Processing message: {message[:100]}...")
+    async def on_message(self, message: str, channel: str):
+        self.logger.info(f"Processing message from {channel}: {message[:100]}...")
 
         try:
             parsed = await self.analyzer.analyze(message)
@@ -99,7 +106,7 @@ class TradingApp:
         try:
             balances = await self.trader.get_balance()
             self.logger.info(f"Current balances: {balances}")
-            quote_balance = balances.get(quote) or balances.get(quote + "S") or 0.0
+            quote_balance = balances.get(quote, 0.0)
 
             # Check if a fixed order size is set in the settings
             if self.settings.ORDER_SIZE_USD > 0:
@@ -129,26 +136,34 @@ class TradingApp:
                 entry = sum(parsed.get("entry_price_range")) / 2.0
             if entry is None:
                 self.logger.info("No entry given; placing market order using estimated market price")
-                entry = 1.0  # fallback
+                # For live market orders, Kraken determines the price, so we don't need to fetch it.
+                # For volume calculation, we still need a price approximation.
+                # A more robust solution would be to fetch the ticker price here.
+                # For simplicity, we'll let Kraken handle it and use 1.0 for volume calculation if no price is given.
+                # Note: This is a simplification. For live trading, fetching the current market price
+                # for a more accurate volume calculation is highly recommended.
+                entry_for_volume_calc = await self.trader.get_market_price(f"{base}{quote}") if hasattr(self.trader, 'get_market_price') else 1.0
+                volume = order_value / max(1e-8, entry_for_volume_calc)
+            else:
+                volume = order_value / max(1e-8, entry)
 
-            volume = order_value / max(1e-8, entry)
+
             pair_str = f"{base}/{quote}"
             side = "buy" if parsed.get("action") == "BUY" else "sell"
 
-            self.logger.info(f"Placing order: {side} {volume} {pair_str} at {entry}")
+            self.logger.info(f"Placing order: {side} {volume:.6f} {pair_str} at {entry} from channel {channel}")
 
             res = await self.trader.place_order(
                 pair_str,
-                side.upper(),
+                side,
                 volume,
                 ordertype=("limit" if parsed.get("entry_price") else "market"),
-                price=entry if parsed.get("entry_price") else None
+                price=entry if parsed.get("entry_price") else None,
+                telegram_channel=channel
             )
 
             self.logger.info(f"Order result: {res}")
-
-            if not self.settings.DRY_RUN:
-                self.daily_trades += 1
+            self.daily_trades += 1
 
         except InsufficientBalanceError as e:
             self.logger.warning(f"Insufficient balance to place order: {e}")
@@ -158,8 +173,19 @@ class TradingApp:
     async def run(self):
         self.logger.info("Starting trading application...")
         self.logger.info(f"Settings: DRY_RUN={self.settings.DRY_RUN}, "
-                        f"Channel={self.settings.TELEGRAM_CHANNEL_ID}, "
+                        f"Channels={self.settings.target_channels}, "
                         f"Max trades={self.settings.MAX_DAILY_TRADES}")
+
+        if not self.settings.DRY_RUN:
+            self.logger.info("Performing initial balance sync from Kraken...")
+            try:
+                live_balances = await self.trader.get_balance()
+                self.db.sync_wallet(live_balances)
+                self.logger.info("✅ Live wallet balances synced with local database.")
+            except Exception as e:
+                self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances from Kraken: {e}")
+                self.logger.error("   Please check your API keys and network connection. Exiting.")
+                return
 
         try:
             await self.telegram.start(self.on_message)

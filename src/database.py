@@ -1,9 +1,10 @@
-"""Manages the SQLite database for dry-run trading."""
+"""Manages the SQLite database for live trading."""
 import sqlite3
 from typing import Dict, Any, List
 
-class DryRunDatabase:
-    def __init__(self, db_name: str = "dry_run.db"):
+class TradingDatabase:
+    """Manages the database for storing live trades and wallet balances."""
+    def __init__(self, db_name: str = "live_trading.db"):
         self.db_name = db_name
         self.conn = sqlite3.connect(self.db_name)
         self.cursor = self.conn.cursor()
@@ -32,27 +33,17 @@ class DryRunDatabase:
         """)
         self.conn.commit()
 
-    def reset_tables(self):
+    def sync_wallet(self, balances: Dict[str, float]):
         """
-        Clears all data from the trades and wallet tables for a fresh start.
+        Clears the wallet table and inserts the latest balances from the exchange.
         """
-        print("Resetting dry-run database for a new session...")
-        self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
+        for currency, balance in balances.items():
+            self.cursor.execute("""
+                INSERT INTO wallet (currency, balance) VALUES (?, ?)
+            """, (currency, balance))
         self.conn.commit()
-
-    def get_balance(self) -> Dict[str, float]:
-        """Get the current balance of all currencies in the wallet."""
-        self.cursor.execute("SELECT currency, balance FROM wallet")
-        return {row[0]: row[1] for row in self.cursor.fetchall()}
-
-    def update_balance(self, currency: str, new_balance: float):
-        """Update the balance of a specific currency."""
-        self.cursor.execute("""
-            INSERT INTO wallet (currency, balance) VALUES (?, ?)
-            ON CONFLICT(currency) DO UPDATE SET balance = excluded.balance
-        """, (currency, new_balance))
-        self.conn.commit()
+        print(f"Wallet synced with {len(balances)} assets.")
 
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
@@ -67,7 +58,7 @@ class DryRunDatabase:
             trade_data["volume"],
             trade_data.get("price"),
             trade_data["ordertype"],
-            "simulated"
+            trade_data["status"]
         ))
         self.conn.commit()
         return self.cursor.lastrowid

@@ -1,7 +1,7 @@
 """Monitors the Telegram channel for new messages using Telethon User API only."""
 from __future__ import annotations
 from telethon import TelegramClient, events
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, List, Union
 import asyncio
 import logging
 import os
@@ -11,10 +11,10 @@ class TelegramMonitor:
 
     Uses User Account API only (TELEGRAM_API_ID + TELEGRAM_API_HASH).
     """
-    def __init__(self, api_id: int, api_hash: str, channel: str, logger: logging.Logger):
+    def __init__(self, api_id: int, api_hash: str, channels: List[Union[int, str]], logger: logging.Logger):
         self.api_id = api_id
         self.api_hash = api_hash
-        self.channel = channel
+        self.channels = channels
         self.logger = logger
 
         # Ensure sessions directory exists and has proper permissions
@@ -39,52 +39,37 @@ class TelegramMonitor:
 
         self.client = TelegramClient(session_file, api_id, api_hash)
 
-    async def start(self, on_message: Callable[[str], Awaitable[None]]):
+    async def start(self, on_message: Callable[[str, str], Awaitable[None]]):
         try:
             self.logger.info("👤 Starting Telegram User client...")
             await self.client.start()
             self.logger.info("✅ Telegram User client started successfully")
 
-            # Test if we can access the channel
-            try:
-                entity = await self.client.get_entity(self.channel)
-                self.logger.info(f"✅ Successfully connected to channel: {getattr(entity, 'title', 'Unknown')}")
-                self.logger.info(f"   Channel ID: {entity.id}")
-                self.logger.info(f"   Channel type: {type(entity).__name__}")
+            # Test if we can access all the channels
+            for channel in self.channels:
+                try:
+                    entity = await self.client.get_entity(channel)
+                    self.logger.info(f"✅ Successfully connected to channel: '{getattr(entity, 'title', 'Unknown')}' (ID: {entity.id})")
+                except Exception as e:
+                    self.logger.error(f"❌ Failed to access channel '{channel}': {e}")
+                    self.logger.error("Make sure your account has access to this channel and the ID is correct.")
+                    return
 
-            except Exception as e:
-                self.logger.error(f"❌ Failed to access channel {self.channel}: {e}")
-                self.logger.error("Make sure:")
-                self.logger.error("  1. Your account has access to this channel")
-                self.logger.error("  2. The channel ID is correct")
-                self.logger.error("  3. You are a member of the channel (for private channels)")
-                return
-
-            # Try to get recent messages (this might fail, but that's OK)
-            try:
-                self.logger.info("🔍 Testing message access...")
-                messages = await self.client.get_messages(self.channel, limit=1)
-                if messages:
-                    self.logger.info(f"✅ Can read messages. Latest message preview: {messages[0].message[:50] if messages[0].message else 'No text'}...")
-                else:
-                    self.logger.info("ℹ️  No recent messages found")
-            except Exception as e:
-                self.logger.warning(f"⚠️  Cannot read message history: {e}")
-                self.logger.info("ℹ️  This is normal for some channels. New messages will still be received!")
-
-            # Set up new message handler
-            @self.client.on(events.NewMessage(chats=self.channel))
+            # Set up new message handler for all specified channels
+            @self.client.on(events.NewMessage(chats=self.channels))
             async def handler(event):
                 try:
                     text = event.message.message
                     if text and text.strip():
-                        self.logger.info(f"📱 NEW MESSAGE RECEIVED:")
-                        self.logger.info(f"   Content: {text[:200]}...")
-                        self.logger.info(f"   From: {getattr(event.message.sender, 'username', 'Unknown')}")
-                        self.logger.info(f"   Time: {event.message.date}")
+                        # Get a user-friendly name for the source channel for logging/DB
+                        source_entity = await event.get_chat()
+                        source_channel_name = getattr(source_entity, 'username', str(event.chat_id))
 
-                        # Process the message
-                        await on_message(text.strip())
+                        self.logger.info(f"📱 NEW MESSAGE from '{source_channel_name}':")
+                        self.logger.info(f"   Content: {text[:200]}...")
+
+                        # Process the message, passing the specific channel it came from
+                        await on_message(text.strip(), source_channel_name)
 
                     else:
                         self.logger.debug("Received message without text content (might be media/sticker)")
@@ -92,8 +77,8 @@ class TelegramMonitor:
                 except Exception as e:
                     self.logger.exception(f"❌ Error processing new message: {e}")
 
-            self.logger.info(f"🎯 LISTENING FOR NEW MESSAGES in {self.channel}")
-            self.logger.info("✅ Bot is ready! Send a message to the channel to test...")
+            self.logger.info(f"🎯 LISTENING FOR NEW MESSAGES in channels: {self.channels}")
+            self.logger.info("✅ Bot is ready! Send a message to a monitored channel to test...")
             self.logger.info("   (Press Ctrl+C to stop)")
 
             # Keep the client running and listening for new messages
@@ -110,14 +95,3 @@ class TelegramMonitor:
                 self.logger.info("📴 Telegram client disconnected")
         except Exception as e:
             self.logger.error(f"Error disconnecting Telegram client: {e}")
-
-    async def test_send_message(self, message: str):
-        """Send a test message to the channel (if you have send permissions)"""
-        try:
-            await self.client.send_message(self.channel, message)
-            self.logger.info(f"✅ Test message sent: {message}")
-            return True
-        except Exception as e:
-            self.logger.warning(f"⚠️  Cannot send messages to this channel: {e}")
-            self.logger.info("This is normal if you don't have send permissions")
-            return False
