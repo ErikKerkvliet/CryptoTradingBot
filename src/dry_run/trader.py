@@ -15,7 +15,6 @@ class DryRunTrader:
         self.db = DryRunDatabase()
         self.wallet = VirtualWallet(self.db)
         self.wallet.reset()
-
         self._client = httpx.AsyncClient(timeout=15)
 
     async def get_balance(self) -> Dict[str, float]:
@@ -31,15 +30,16 @@ class DryRunTrader:
             response.raise_for_status()
             data = response.json()
             if data.get("result"):
-                # Get the last trade price
                 return float(list(data["result"].values())[0]["c"][0])
             raise ValueError("Invalid response from Kraken API")
         except Exception as e:
             print(f"Error fetching market price: {e}")
-            return 1.0  # Fallback price
+            return 1.0
 
     async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
-                          price: Optional[float] = None, telegram_channel: Optional[str] = None) -> Dict[str, Any]:
+                          price: Optional[float] = None, telegram_channel: Optional[str] = None,
+                          take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
+                          take_profit_target: Optional[int] = None) -> Dict[str, Any]:
         """Simulate placing an order and record it in the database."""
         balances = self.wallet.get_balance()
         base_currency, quote_currency = pair.split('/')
@@ -53,15 +53,11 @@ class DryRunTrader:
         if side.lower() == "buy":
             if balances.get(quote_currency, 0) < cost:
                 raise InsufficientBalanceError("Insufficient funds for the trade.")
-
-            # Simulate the trade
             self.wallet.update_balance(quote_currency, balances[quote_currency] - cost)
             self.wallet.update_balance(base_currency, balances.get(base_currency, 0) + volume)
         else:  # Sell
             if balances.get(base_currency, 0) < volume:
                 raise InsufficientBalanceError("Insufficient funds for the trade.")
-
-            # Simulate the trade
             self.wallet.update_balance(base_currency, balances[base_currency] - volume)
             self.wallet.update_balance(quote_currency, balances.get(quote_currency, 0) + cost)
 
@@ -72,11 +68,15 @@ class DryRunTrader:
             "volume": volume,
             "price": price,
             "ordertype": ordertype,
-            "telegram_channel": telegram_channel
+            "telegram_channel": telegram_channel,
+            "status": "open",
+            "take_profit": take_profit,
+            "stop_loss": stop_loss,
+            "take_profit_target": take_profit_target
         }
         self.db.add_trade(trade_data)
 
-        return {"status": "simulated", **trade_data}
+        return {"status": "simulated_open", **trade_data}
 
     async def close(self):
         """Close the database and client connections."""

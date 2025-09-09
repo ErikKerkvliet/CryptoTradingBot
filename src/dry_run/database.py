@@ -1,6 +1,8 @@
 """Manages the SQLite database for dry-run trading."""
 import sqlite3
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+import json
+
 
 class DryRunDatabase:
     def __init__(self, db_name: str = "dry_run.db"):
@@ -21,7 +23,10 @@ class DryRunDatabase:
                 volume REAL NOT NULL,
                 price REAL,
                 ordertype TEXT NOT NULL,
-                status TEXT NOT NULL
+                status TEXT NOT NULL,
+                take_profit REAL,
+                stop_loss REAL,
+                take_profit_key INTEGER
             )
         """)
         self.cursor.execute("""
@@ -30,15 +35,30 @@ class DryRunDatabase:
                 balance REAL NOT NULL
             )
         """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT,
+                base_currency TEXT,
+                quote_currency TEXT,
+                confidence INTEGER,
+                entry_price_range TEXT,
+                leverage TEXT,
+                stop_loss REAL,
+                take_profit_levels TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
 
     def reset_tables(self):
         """
-        Clears all data from the trades and wallet tables for a fresh start.
+        Clears all data from the tables for a fresh start.
         """
         print("Resetting dry-run database for a new session...")
         self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
+        self.cursor.execute("DELETE FROM llm_responses")
         self.conn.commit()
 
     def get_balance(self) -> Dict[str, float]:
@@ -57,8 +77,8 @@ class DryRunDatabase:
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
             trade_data["quote_currency"],
@@ -67,10 +87,70 @@ class DryRunDatabase:
             trade_data["volume"],
             trade_data.get("price"),
             trade_data["ordertype"],
-            "simulated"
+            trade_data["status"],
+            trade_data.get("take_profit"),
+            trade_data.get("stop_loss"),
+            trade_data.get("take_profit_target")
         ))
         self.conn.commit()
         return self.cursor.lastrowid
+
+    def add_llm_response(self, response_data: Dict[str, Any]):
+        """Adds a new LLM response to the database."""
+        self.cursor.execute("""
+            INSERT INTO llm_responses (action, base_currency, quote_currency, confidence, 
+                                     entry_price_range, leverage, stop_loss, take_profit_levels)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            response_data.get('action'),
+            response_data.get('base_currency'),
+            response_data.get('quote_currency'),
+            response_data.get('confidence'),
+            json.dumps(response_data.get('entry_price_range')),
+            str(response_data.get('leverage')),
+            response_data.get('stop_loss'),
+            json.dumps(response_data.get('take_profit_levels'))
+        ))
+        self.conn.commit()
+
+    def _transform_llm_response(self, row: tuple, columns: list) -> Optional[Dict[str, Any]]:
+        """Transforms a raw DB row into a formatted dictionary with correct data types."""
+        if not row:
+            return None
+
+        response = dict(zip(columns, row))
+
+        for field in ['entry_price_range', 'take_profit_levels']:
+            if response.get(field):
+                try:
+                    response[field] = json.loads(response[field])
+                except (json.JSONDecodeError, TypeError):
+                    response[field] = None
+            else:
+                response[field] = None
+
+        if response.get('confidence') is not None:
+            response['confidence'] = int(response['confidence'])
+        if response.get('stop_loss') is not None:
+            response['stop_loss'] = float(response['stop_loss'])
+
+        return response
+
+    def get_llm_response(self, response_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a specific LLM response, or the latest one.
+        """
+        if response_id is None:
+            self.cursor.execute("SELECT * FROM llm_responses ORDER BY id DESC LIMIT 1")
+        else:
+            self.cursor.execute("SELECT * FROM llm_responses WHERE id = ?", (response_id,))
+
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+
+        columns = [description[0] for description in self.cursor.description]
+        return self._transform_llm_response(row, columns)
 
     def get_trades(self) -> List[Dict[str, Any]]:
         """Retrieve all trades from the database."""

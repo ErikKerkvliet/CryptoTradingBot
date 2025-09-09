@@ -1,47 +1,28 @@
-"""SignalAnalyzer uses OpenAI to parse text signals into structured objects."""
+"""SignalAnalyzer parses Telegram messages into structured trading signals."""
 from __future__ import annotations
-from typing import Dict, Any, Optional, List, Union
-from openai import OpenAI
-import asyncio
+from typing import Dict, Any, Optional
 import re
 import json
 from .utils.exceptions import SignalParseError
 
 
 class SignalAnalyzer:
-    """Parses Telegram messages into structured trading signals using OpenAI completion as helper.
+    """Parses Telegram messages into structured trading signals using regex only."""
 
-    The openai API key must be set in the environment (see config.settings)
-    """
-
-    PROMPT_TEMPLATE = (
-        "Parse the following trading signal into a valid JSON object. Use the following keys: "
-        "action (BUY/SELL), base_currency, quote_currency, entry_price or entry_price_range (list), "
-        "take_profit_levels (list), stop_loss, leverage (optional), and confidence (0-100).\n\n"
-        "**Important Rules:**\n"
-        "1. For 'base_currency' and 'quote_currency', you MUST map any currency name to its official ticker "
-        "symbol as used by the Kraken exchange (e.g., Bitcoin must be 'XBT', Ethereum must be 'ETH', Solana must be 'SOL').\n"
-        "2. The 'confidence' field must be your own integer estimate (0-100) of how accurately you parsed the signal.\n"
-        "3. If any field (except for the required ones) is not present in the signal, its value in the JSON must be null.\n\n"
-        "Return only the raw JSON object and nothing else.\n\n"
-    )
-
-    def __init__(self, openai_api_key: str):
-        self.client = OpenAI(api_key=openai_api_key)
+    def __init__(self):
+        pass
 
     async def analyze(self, message: str) -> Dict[str, Any]:
-        # Fast heuristic attempt first (regex). If low-confidence or ambiguous, fall back to OpenAI.
+        # Use regex parser only
         result = self._regex_parse(message)
-        if result and result.get("confidence", 0) >= 85:
-            return result
-        # else call OpenAI (async call)
-        parsed = await self._call_openai(message)
-        if not parsed:
+        if not result:
             raise SignalParseError("Failed to parse signal")
-        return parsed
+        return result
 
     def _regex_parse(self, text: str) -> Optional[Dict[str, Any]]:
-        t = text.upper()
+        """Regex-based parser that builds structured JSON with confidence=100."""
+        t = text
+
         out = {
             "action": None,
             "base_currency": None,
@@ -51,89 +32,54 @@ class SignalAnalyzer:
             "take_profit_levels": None,
             "stop_loss": None,
             "leverage": None,
-            "confidence": 0,
+            "confidence": 100,  # always 100 now
         }
+
         # action
-        if any(k in t for k in ("LONG", "BUY")):
+        if re.search(r'Position:\s*LONG', t, re.I):
             out["action"] = "BUY"
-        elif any(k in t for k in ("SHORT", "SELL")):
+        elif re.search(r'Position:\s*SHORT', t, re.I):
+            out["action"] = "SELL"
+        elif re.search(r'Take-?Profit target', t, re.I) or re.search(r'Profit:', t, re.I):
             out["action"] = "SELL"
 
-        # pair e.g. #BTC/USDT or BTC/USDT
-        m = re.search(r"([A-Z0-9]+)[/\\\\]?(USDT|USDC|USD|EUR|BTC|ETH)", t)
+        # pair
+        m = re.search(r'#?([A-Za-z0-9]+)\/([A-Za-z0-9]+)', t)
         if m:
-            out["base_currency"] = m.group(1)
-            out["quote_currency"] = m.group(2)
+            out["base_currency"] = m.group(1).upper()
+            out["quote_currency"] = m.group(2).upper()
 
         # leverage
-        mlev = re.search(r"(\d{1,3})X", t)
+        mlev = re.search(r'Leverage:\s*([^\n\r]+)', t, re.I)
         if mlev:
-            out["leverage"] = int(mlev.group(1))
+            out["leverage"] = mlev.group(1).strip()
 
-        # entry range
-        mentry_range = re.search(r"ENTRY[:\s]+(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)", t)
+        # entry price range
+        mentry_range = re.search(r'Entries?:\s*([0-9]*\.?[0-9]+)\s*-\s*([0-9]*\.?[0-9]+)', t, re.I)
         if mentry_range:
-            a = float(mentry_range.group(1))
-            b = float(mentry_range.group(2))
-            out["entry_price_range"] = [min(a, b), max(a, b)]
+            out["entry_price_range"] = [float(mentry_range.group(1)), float(mentry_range.group(2))]
+        else:
+            # single entry
+            mentry_single = re.search(r'Entries?:\s*([0-9]*\.?[0-9]+)', t, re.I)
+            if mentry_single:
+                out["entry_price"] = float(mentry_single.group(1))
 
-        mentry_single = re.search(r"ENTRY[:\s]+(\d+(?:\.\d+)?)", t)
-        if mentry_single and not out["entry_price_range"]:
-            out["entry_price"] = float(mentry_single.group(1))
+        # targets
+        targets_m = re.search(r'Targets?:\s*([^\n\r]+)', t, re.I)
+        if targets_m:
+            nums = re.findall(r'\d+\.\d+|\d+', targets_m.group(1))
+            if nums:
+                out["take_profit_levels"] = [float(n) for n in nums]
+        else:
+            tp_idx = re.search(r'Take-?Profit target[s]?\s*(\d+)', t, re.I)
+            if tp_idx:
+                out["take_profit_levels"] = int(tp_idx.group(1))
 
-        # TP
-        mtp = re.search(r"TP[:\s]+([0-9\.,\s]+)", t)
-        if not mtp:
-            mtp = re.search(r"TARGETS?[:\s]+([0-9\.,\s]+)", t)
-        if mtp:
-            nums = re.findall(r"\d+(?:\.\d+)?", mtp.group(1))
-            out["take_profit_levels"] = [float(x) for x in nums]
-
-        # SL
-        msl = re.search(r"SL[:\s]+(\d+(?:\.\d+)?)", t)
-        if msl:
-            out["stop_loss"] = float(msl.group(1))
-
-        # crude confidence
-        confidence = 40
-        if out["action"]:
-            confidence += 15
-        if out["base_currency"] and out["quote_currency"]:
-            confidence += 20
-        if out["take_profit_levels"] or out["stop_loss"]:
-            confidence += 10
-        if out["entry_price"] or out["entry_price_range"]:
-            confidence += 15
-        out["confidence"] = min(100, confidence)
+        # stop loss
+        sl_m = re.search(r'Stop Loss:\s*([0-9]*\.?[0-9]+)', t, re.I)
+        if sl_m:
+            out["stop_loss"] = float(sl_m.group(1))
 
         if out["action"] and out["base_currency"]:
             return out
         return None
-
-    async def _call_openai(self, message: str) -> Optional[Dict[str, Any]]:
-        prompt = self.PROMPT_TEMPLATE + "Signal:\n" + message + "\n\nReturn JSON only."
-        try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model="gpt-5-nano",
-                    messages=[
-                        {"role": "system", "content": "You are a trading signal parser. Return only valid JSON."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    max_completion_tokens=3000,
-                    temperature=1
-                )
-            )
-
-            text = response.choices[0].message.content.strip()
-            # sometimes returns code block - extract JSON
-            m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
-            if m:
-                text = m.group(1)
-            data = json.loads(text)
-            return data
-        except Exception as e:
-            print(f"OpenAI API error: {e}")
-            return None
