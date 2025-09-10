@@ -4,42 +4,49 @@ from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    """Defines the application's configuration settings."""
+    """Defines the application's configuration settings using Pydantic."""
 
-    # Kraken API
-    KRAKEN_API_KEY: str
-    KRAKEN_API_SECRET: str
+    # -- General Application Settings --
+    EXCHANGE: str = "KRAKEN"         # The exchange to trade on: "KRAKEN" or "MEXC"
+    TRADING_MODE: str = "SPOT"       # The trading mode: "SPOT" or "FUTURES"
+    LOG_LEVEL: str = "INFO"          # Logging level, e.g., "DEBUG", "INFO", "WARNING"
 
-    # OpenAI API
+    # -- API Keys --
+    KRAKEN_API_KEY: Optional[str] = None
+    KRAKEN_API_SECRET: Optional[str] = None
+    MEXC_API_KEY: Optional[str] = None
+    MEXC_API_SECRET: Optional[str] = None
     OPENAI_API_KEY: str
 
-    # Telegram API
+    # -- Telegram API Settings --
     TELEGRAM_API_ID: int
     TELEGRAM_API_HASH: str
     TELEGRAM_BOT_TOKEN: Optional[str] = None
 
-    # Channel IDs
-    TELEGRAM_CHANNEL_ID: Optional[str] = None
-    TELEGRAM_DRY_RUN_CHANNEL_ID: Optional[str] = None
+    # -- Telegram Channel IDs --
+    TELEGRAM_CHANNEL_ID: Optional[str] = None        # Channel for live trades
+    TELEGRAM_DRY_RUN_CHANNEL_ID: Optional[str] = None # Channel for simulated trades
 
-    # Trading Configuration
+    # -- Core Trading Configuration --
     DRY_RUN: bool = True
-    MAX_POSITION_SIZE_PERCENT: float = 5.0
-    ORDER_SIZE_USD: float = 0.0
-    MIN_CONFIDENCE_THRESHOLD: int = 80
-    MAX_DAILY_TRADES: int = 10
+    MAX_POSITION_SIZE_PERCENT: float = 5.0  # Max % of quote currency balance to use for a trade
+    ORDER_SIZE_USD: float = 0.0             # Fixed order size in USD (overrides percentage if > 0)
+    MIN_CONFIDENCE_THRESHOLD: int = 80      # Minimum signal confidence to execute a trade (1-100)
+    MAX_DAILY_TRADES: int = 10              # Maximum number of trades to execute in a 24-hour period
 
-    # Misc
-    LOG_LEVEL: str = "INFO"
+    # -- Futures-Specific Settings --
+    DEFAULT_LEVERAGE: int = 10              # Default leverage if not specified in the signal
 
     class Config:
-        env_file = ".env"
-        extra = "ignore"
+        """Pydantic model configuration."""
+        env_file = ".env"  # Load settings from a .env file
+        extra = "ignore"   # Ignore extra fields in the .env file
 
     @property
     def target_channels(self) -> List[Union[int, str]]:
         """
         Returns a list of channel IDs to monitor based on the DRY_RUN setting.
+        This allows the bot to listen to different channels for live vs. simulated trading.
         """
         channels = []
         raw_channels = []
@@ -54,23 +61,50 @@ class Settings(BaseSettings):
                     # Convert to int if it's a numeric ID (e.g., -100123456)
                     channels.append(int(channel))
                 except (ValueError, TypeError):
-                    # Otherwise, keep as a string (e.g., a public channel username)
+                    # Otherwise, keep as a string for public channel usernames (e.g., '@channel_name')
                     channels.append(channel)
         return channels
 
     def validate_required_fields(self):
         """
-        Validates that the necessary environment variables are set based on the mode.
+        Validates that all necessary environment variables are set based on the
+        selected trading mode, exchange, and dry_run status. This prevents
+        runtime errors due to missing configuration.
         """
+        # --- Channel ID Validation ---
         if self.DRY_RUN:
             if not self.TELEGRAM_DRY_RUN_CHANNEL_ID:
                 raise ValueError(
                     "Missing required environment variable: TELEGRAM_DRY_RUN_CHANNEL_ID (required when DRY_RUN=true)"
                 )
-        else:
+        else: # Live Trading
             if not self.TELEGRAM_CHANNEL_ID:
                 raise ValueError(
                     "Missing required environment variable: TELEGRAM_CHANNEL_ID (required when DRY_RUN=false)"
                 )
 
+            # --- Live Trading API Key Validation ---
+            mode = self.TRADING_MODE.upper()
+            exchange = self.EXCHANGE.upper()
+
+            if mode == "SPOT":
+                if exchange == "KRAKEN":
+                    if not self.KRAKEN_API_KEY or not self.KRAKEN_API_SECRET:
+                        raise ValueError("KRAKEN_API_KEY and KRAKEN_API_SECRET are required for live SPOT trading on Kraken.")
+                elif exchange == "MEXC":
+                    if not self.MEXC_API_KEY or not self.MEXC_API_SECRET:
+                        raise ValueError("MEXC_API_KEY and MEXC_API_SECRET are required for live SPOT trading on MEXC.")
+                else:
+                    raise ValueError(f"Unsupported EXCHANGE for SPOT trading: '{self.EXCHANGE}'. Must be 'KRAKEN' or 'MEXC'.")
+
+            elif mode == "FUTURES":
+                if exchange != "MEXC":
+                    raise ValueError(f"Unsupported EXCHANGE for FUTURES trading: '{self.EXCHANGE}'. Currently, only 'MEXC' is supported.")
+                if not self.MEXC_API_KEY or not self.MEXC_API_SECRET:
+                    raise ValueError("MEXC_API_KEY and MEXC_API_SECRET are required for live FUTURES trading.")
+
+            else:
+                raise ValueError(f"Unsupported TRADING_MODE: '{self.TRADING_MODE}'. Must be 'SPOT' or 'FUTURES'.")
+
+# Create a single, global instance of the settings to be used throughout the application
 settings = Settings()

@@ -26,7 +26,8 @@ class DryRunDatabase:
                 status TEXT NOT NULL,
                 take_profit REAL,
                 stop_loss REAL,
-                take_profit_key INTEGER
+                take_profit_target INTEGER,
+                leverage INTEGER DEFAULT 0
             )
         """)
         self.cursor.execute("""

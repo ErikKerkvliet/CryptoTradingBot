@@ -2,6 +2,7 @@
 import asyncio
 import sys
 import os
+import re
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,15 +17,23 @@ except Exception as e:
 from src.utils.logger import setup_logger
 from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
-from src.pair_validator import PairValidator
-
-if settings.DRY_RUN:
-    from src.dry_run.trader import DryRunTrader
-else:
-    from src.database import TradingDatabase
-    from src.kraken_trader import KrakenTrader
-
+from src.database import TradingDatabase
+from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
+
+# --- Dynamic Imports Based on Trading Mode ---
+if settings.TRADING_MODE.upper() == "FUTURES":
+    # For futures, we use a specific validator and MEXC's futures trader
+    from src.futures.futures_pair_validator import FuturesPairValidator as PairValidator
+    if not settings.DRY_RUN:
+        from src.futures.mexc_futures_trader import MexcFuturesTrader as LiveTrader
+else:  # SPOT trading
+    from src.pair_validator import PairValidator
+    if not settings.DRY_RUN:
+        if settings.EXCHANGE.upper() == "KRAKEN":
+            from src.kraken_trader import KrakenTrader as LiveTrader
+        elif settings.EXCHANGE.upper() == "MEXC":
+            from src.mexc_trader import MexcTrader as LiveTrader
 
 logger = setup_logger(level=settings.LOG_LEVEL)
 
@@ -33,25 +42,34 @@ class TradingApp:
         self.settings = settings
         self.logger = logger
         self.analyzer = SignalAnalyzer()
-        self.validator = PairValidator()
-        self.db = None
+        self.db = TradingDatabase()
         self.trader = None
 
+        # --- FIX: Instantiate the correct validator with required arguments ---
+        if self.settings.TRADING_MODE.upper() == "FUTURES":
+            self.validator = PairValidator()  # FuturesPairValidator requires no arguments
+        else: # SPOT
+            self.validator = PairValidator(self.settings.EXCHANGE)  # Spot PairValidator needs the exchange name
+
         if self.settings.DRY_RUN:
-            self.logger.info("🤖 Starting in DRY RUN mode. No real trades will be executed.")
+            self.logger.info(f"🤖 Starting in DRY RUN mode for {self.settings.TRADING_MODE} trading.")
             self.trader = DryRunTrader(
-                settings.KRAKEN_API_KEY,
-                settings.KRAKEN_API_SECRET
+                exchange=settings.EXCHANGE,
+                trading_mode=settings.TRADING_MODE
             )
-            self.db = self.trader.db
         else:
-            self.logger.info("⚡ Starting in LIVE TRADING mode. Real trades will be executed.")
-            self.db = TradingDatabase()
-            self.trader = KrakenTrader(
-                settings.KRAKEN_API_KEY,
-                settings.KRAKEN_API_SECRET,
-                self.db
-            )
+            self.logger.info(f"⚡ Starting in LIVE {self.settings.TRADING_MODE} mode on {self.settings.EXCHANGE}.")
+            if self.settings.TRADING_MODE.upper() == "FUTURES":
+                self.trader = LiveTrader(
+                    self.settings.MEXC_API_KEY,
+                    self.settings.MEXC_API_SECRET,
+                    self.db,
+                    self.settings.DEFAULT_LEVERAGE
+                )
+            else:  # SPOT
+                api_key = self.settings.KRAKEN_API_KEY if self.settings.EXCHANGE.upper() == "KRAKEN" else self.settings.MEXC_API_KEY
+                api_secret = self.settings.KRAKEN_API_SECRET if self.settings.EXCHANGE.upper() == "KRAKEN" else self.settings.MEXC_API_SECRET
+                self.trader = LiveTrader(api_key, api_secret, self.db)
 
         self.telegram = TelegramMonitor(
             settings.TELEGRAM_API_ID,
@@ -92,17 +110,17 @@ class TradingApp:
             return
 
         base = parsed.get("base_currency")
-        quote = parsed.get("quote_currency") or "USDC"
+        quote = parsed.get("quote_currency") or "USDT"
 
         if not base:
             self.logger.warning("No base currency found in signal")
             return
 
         try:
-            base, quote = await self.validator.validate_and_convert(base, quote)
-            self.logger.info(f"Validated pair: {base}/{quote}")
+            validated_pair_str, base, quote = await self.validator.validate_and_convert(base, quote)
+            self.logger.info(f"Validated pair for {self.settings.EXCHANGE} ({self.settings.TRADING_MODE}): {validated_pair_str} ({base}/{quote})")
         except PairNotFoundError as e:
-            self.logger.warning(f"Pair not available on Kraken: {e}")
+            self.logger.warning(f"Pair not available on {self.settings.EXCHANGE}: {e}")
             return
         except Exception as e:
             self.logger.error(f"Error validating pair: {e}")
@@ -136,12 +154,12 @@ class TradingApp:
                     entry = sum(parsed.get("entry_price_range")) / 2.0
 
                 if entry is None:
-                    entry_for_volume_calc = await self.trader.get_market_price(f"{base}{quote}") if hasattr(self.trader, 'get_market_price') else 1.0
-                    volume = order_value / max(1e-8, entry_for_volume_calc)
+                    market_price = await self.trader.get_market_price(validated_pair_str)
+                    volume = order_value / max(1e-8, market_price)
                 else:
                     volume = order_value / max(1e-8, entry)
 
-            else: # side == "sell"
+            else:  # side == "sell"
                 base_balance = balances.get(base, 0.0)
                 self.logger.info(f"Detected SELL signal for {base}. Current balance: {base_balance}")
                 if base_balance <= 0:
@@ -151,7 +169,6 @@ class TradingApp:
                 volume = base_balance
                 self.logger.info(f"Setting order volume to sell 100% of {base} balance: {volume:.8f}")
 
-            pair_str = f"{base}/{quote}"
             entry = parsed.get("entry_price")
             if entry is None and parsed.get("entry_price_range"):
                 entry = sum(parsed.get("entry_price_range")) / 2.0
@@ -168,19 +185,32 @@ class TradingApp:
                 take_profit = take_profit_levels[-1]
                 take_profit_key = 0
 
-            self.logger.info(f"Placing order: {side} {volume:.6f} {pair_str} at {entry} from {channel}")
-            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_key})")
+            # --- Futures Specific Logic ---
+            leverage = 0
+            if self.settings.TRADING_MODE.upper() == "FUTURES":
+                leverage_str = parsed.get("leverage")
+                if leverage_str:
+                    # Extracts numbers from strings like "Cross 20x"
+                    leverage_digits = re.search(r'(\d+)', str(leverage_str))
+                    if leverage_digits:
+                        leverage = int(leverage_digits.group(1))
+                        self.logger.info(f"Extracted leverage from signal: {leverage}x")
 
+            self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
+            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_key}), Leverage: {leverage or 'Default'}x")
+
+            # The 'leverage' kwarg will be safely ignored by spot traders
             res = await self.trader.place_order(
-                pair_str,
-                side,
-                volume,
+                pair=validated_pair_str,
+                side=side,
+                volume=volume,
                 ordertype=("limit" if entry else "market"),
                 price=entry,
                 telegram_channel=channel,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                take_profit_key=take_profit_key
+                take_profit_key=take_profit_key,
+                leverage=leverage
             )
 
             self.logger.info(f"Order result: {res}")
@@ -193,16 +223,16 @@ class TradingApp:
 
     async def run(self):
         self.logger.info("Starting trading application...")
-        self.logger.info(f"Settings: DRY_RUN={self.settings.DRY_RUN}, Channels={self.settings.target_channels}, Max trades={self.settings.MAX_DAILY_TRADES}")
+        self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}, Channels={self.settings.target_channels}, Max trades={self.settings.MAX_DAILY_TRADES}")
 
         if not self.settings.DRY_RUN:
-            self.logger.info("Performing initial balance sync from Kraken...")
+            self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")
             try:
                 live_balances = await self.trader.get_balance()
                 self.db.sync_wallet(live_balances)
                 self.logger.info("✅ Live wallet balances synced with local database.")
             except Exception as e:
-                self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances from Kraken: {e}")
+                self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances from {self.settings.EXCHANGE}: {e}")
                 self.logger.error("   Please check your API keys and network connection. Exiting.")
                 return
 
