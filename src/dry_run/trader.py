@@ -108,7 +108,7 @@ class DryRunTrader:
     async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
                           take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
-                          take_profit_key: Optional[int] = None, leverage: int = 0) -> Dict[str, Any]:
+                          take_profit_level: Optional[int] = None, leverage: int = 0) -> Dict[str, Any]:
         """Simulate placing an order and record it in the database."""
         balances = self.wallet.get_balance()
         base_currency, quote_currency = self._split_pair(pair)
@@ -145,7 +145,7 @@ class DryRunTrader:
             "status": "simulated_open",
             "take_profit": take_profit,
             "stop_loss": stop_loss,
-            "take_profit_target": take_profit_key,
+            "take_profit_lever": take_profit_level,
             "leverage": leverage if self.trading_mode == "FUTURES" else 0,
         }
         self.db.add_trade(trade_data)

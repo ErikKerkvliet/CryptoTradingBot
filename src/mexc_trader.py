@@ -107,7 +107,7 @@ class MexcTrader:
                 raise ValueError("Price must be specified for limit orders.")
             params["price"] = f"{price:.8f}"
 
-        res = await self._signed_request("POST", "/api/v3/order", params=params)
+        #res = await self._signed_request("POST", "/api/v3/order", params=params)
 
         trade_data = {
             "base_currency": base_currency,

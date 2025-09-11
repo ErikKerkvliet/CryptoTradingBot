@@ -27,7 +27,7 @@ class TradingDatabase:
                 status TEXT NOT NULL,
                 take_profit REAL,
                 stop_loss REAL,
-                take_profit_target INTEGER,
+                take_profit_level INTEGER,
                 leverage INTEGER DEFAULT 0
             )
         """)
@@ -37,20 +37,20 @@ class TradingDatabase:
                 balance REAL NOT NULL
             )
         """)
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS llm_responses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action TEXT,
-                base_currency TEXT,
-                quote_currency TEXT,
-                confidence INTEGER,
-                entry_price_range TEXT,
-                leverage TEXT,
-                stop_loss REAL,
-                take_profit_levels TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # self.cursor.execute("""
+        #     CREATE TABLE IF NOT EXISTS llm_responses (
+        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        #         action TEXT,
+        #         base_currency TEXT,
+        #         quote_currency TEXT,
+        #         confidence INTEGER,
+        #         entry_price_range TEXT,
+        #         leverage TEXT,
+        #         stop_loss REAL,
+        #         take_profit_levels TEXT,
+        #         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         self.conn.commit()
 
     def sync_wallet(self, balances: Dict[str, float]):
@@ -68,7 +68,7 @@ class TradingDatabase:
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_lever)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
@@ -81,7 +81,7 @@ class TradingDatabase:
             trade_data["status"],
             trade_data.get("take_profit"),
             trade_data.get("stop_loss"),
-            trade_data.get("take_profit_target")
+            trade_data.get("take_profit_lever")
         ))
         self.conn.commit()
         return self.cursor.lastrowid

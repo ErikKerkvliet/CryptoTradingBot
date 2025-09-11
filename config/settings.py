@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     KRAKEN_API_SECRET: Optional[str] = None
     MEXC_API_KEY: Optional[str] = None
     MEXC_API_SECRET: Optional[str] = None
-    OPENAI_API_KEY: str
+    #OPENAI_API_KEY: str
 
     # -- Telegram API Settings --
     TELEGRAM_API_ID: int
@@ -47,22 +47,23 @@ class Settings(BaseSettings):
         """
         Returns a list of channel IDs to monitor based on the DRY_RUN setting.
         This allows the bot to listen to different channels for live vs. simulated trading.
+        Handles comma-separated channel IDs in the environment variables.
         """
         channels = []
-        raw_channels = []
-        if self.DRY_RUN:
-            raw_channels = [self.TELEGRAM_DRY_RUN_CHANNEL_ID]
-        else:
-            raw_channels = [self.TELEGRAM_CHANNEL_ID]
+        raw_channel_string = self.TELEGRAM_DRY_RUN_CHANNEL_ID if self.DRY_RUN else self.TELEGRAM_CHANNEL_ID
 
-        for channel in raw_channels:
-            if channel:
-                try:
-                    # Convert to int if it's a numeric ID (e.g., -100123456)
-                    channels.append(int(channel))
-                except (ValueError, TypeError):
-                    # Otherwise, keep as a string for public channel usernames (e.g., '@channel_name')
-                    channels.append(channel)
+        if raw_channel_string:
+            # Split the string by commas to get a list of channels
+            raw_channels = [channel.strip() for channel in raw_channel_string.split(',')]
+
+            for channel in raw_channels:
+                if channel:
+                    try:
+                        # Convert to int if it's a numeric ID (e.g., -100123456)
+                        channels.append(int(channel))
+                    except (ValueError, TypeError):
+                        # Otherwise, keep as a string for public channel usernames (e.g., '@channel_name')
+                        channels.append(channel)
         return channels
 
     def validate_required_fields(self):

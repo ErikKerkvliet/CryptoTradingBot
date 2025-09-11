@@ -17,9 +17,14 @@ except Exception as e:
 from src.utils.logger import setup_logger
 from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
-from src.database import TradingDatabase
+
 from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
+
+if settings.DRY_RUN:
+    from src.dry_run.database import DryRunDatabase as TradingDatabase
+else:
+    from src.database import TradingDatabase
 
 # --- Dynamic Imports Based on Trading Mode ---
 if settings.TRADING_MODE.upper() == "FUTURES":
@@ -86,12 +91,13 @@ class TradingApp:
             parsed = await self.analyzer.analyze(message, channel)
             self.logger.info(f"Parsed signal: {parsed}")
 
-            if parsed and self.db:
-                try:
-                    self.db.add_llm_response(parsed)
-                    self.logger.info("✅ Successfully saved LLM response to the database.")
-                except Exception as db_err:
-                    self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")
+            # --- Optional: Save parsed llm signal to DB ---
+            # if parsed and self.db:
+            #     try:
+            #         self.db.add_llm_response(parsed)
+            #         self.logger.info("✅ Successfully saved LLM response to the database.")
+            #     except Exception as db_err:
+            #         self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")
 
         except SignalParseError as e:
             self.logger.warning(f"Could not parse signal: {e}")
@@ -176,14 +182,14 @@ class TradingApp:
             stop_loss = parsed.get("stop_loss")
             take_profit_levels = parsed.get("take_profit_levels")
             take_profit = None
-            take_profit_key = None
+            take_profit_lever = None
 
             if take_profit_levels and len(take_profit_levels) >= 2:
                 take_profit = take_profit_levels[-2]
-                take_profit_key = len(take_profit_levels) - 2
+                take_profit_lever = len(take_profit_levels) - 2
             elif take_profit_levels:
                 take_profit = take_profit_levels[-1]
-                take_profit_key = 0
+                take_profit_lever = 0
 
             # --- Futures Specific Logic ---
             leverage = 0
@@ -197,7 +203,7 @@ class TradingApp:
                         self.logger.info(f"Extracted leverage from signal: {leverage}x")
 
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
-            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_key}), Leverage: {leverage or 'Default'}x")
+            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_lever}), Leverage: {leverage or 'Default'}x")
 
             # The 'leverage' kwarg will be safely ignored by spot traders
             res = await self.trader.place_order(
@@ -209,7 +215,7 @@ class TradingApp:
                 telegram_channel=channel,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                take_profit_key=take_profit_key,
+                take_profit_level=take_profit_lever,
                 leverage=leverage
             )
 

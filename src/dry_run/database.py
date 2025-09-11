@@ -26,7 +26,7 @@ class DryRunDatabase:
                 status TEXT NOT NULL,
                 take_profit REAL,
                 stop_loss REAL,
-                take_profit_target INTEGER,
+                take_profit_level INTEGER,
                 leverage INTEGER DEFAULT 0
             )
         """)
@@ -36,20 +36,21 @@ class DryRunDatabase:
                 balance REAL NOT NULL
             )
         """)
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS llm_responses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action TEXT,
-                base_currency TEXT,
-                quote_currency TEXT,
-                confidence INTEGER,
-                entry_price_range TEXT,
-                leverage TEXT,
-                stop_loss REAL,
-                take_profit_levels TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # self.cursor.execute("""
+        #     CREATE TABLE IF NOT EXISTS llm_responses (
+        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        #         action TEXT,
+        #         base_currency TEXT,
+        #         quote_currency TEXT,
+        #         confidence INTEGER,
+        #         entry_price_range TEXT,
+        #         leverage TEXT,
+        #         stop_loss REAL,
+        #         take_profit_levels TEXT,
+        #         take_profit_level INTEGER,
+        #         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         self.conn.commit()
 
     def reset_tables(self):
@@ -59,7 +60,7 @@ class DryRunDatabase:
         print("Resetting dry-run database for a new session...")
         self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
-        self.cursor.execute("DELETE FROM llm_responses")
+        #self.cursor.execute("DELETE FROM llm_responses")
         self.conn.commit()
 
     def get_balance(self) -> Dict[str, float]:
@@ -78,7 +79,7 @@ class DryRunDatabase:
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_key)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_level)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
@@ -91,7 +92,7 @@ class DryRunDatabase:
             trade_data["status"],
             trade_data.get("take_profit"),
             trade_data.get("stop_loss"),
-            trade_data.get("take_profit_target")
+            trade_data.get("take_profit_lever")
         ))
         self.conn.commit()
         return self.cursor.lastrowid
