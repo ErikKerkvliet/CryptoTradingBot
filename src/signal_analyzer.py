@@ -1,85 +1,52 @@
 """SignalAnalyzer parses Telegram messages into structured trading signals."""
 from __future__ import annotations
-from typing import Dict, Any, Optional
-import re
-import json
+from typing import Dict, Any
+import importlib
+import os
 from .utils.exceptions import SignalParseError
-
+from .analyzers.abstract_analyzer import AbstractAnalyzer
+from .analyzers.default_analyzer import DefaultAnalyzer
 
 class SignalAnalyzer:
-    """Parses Telegram messages into structured trading signals using regex only."""
+    """
+    Acts as a factory to load and delegate to the appropriate analyzer
+    based on the channel name.
+    """
 
     def __init__(self):
-        pass
+        self._analyzers: Dict[str, AbstractAnalyzer] = {}
+        self._load_analyzers()
 
-    async def analyze(self, message: str) -> Dict[str, Any]:
-        # Use regex parser only
-        result = self._regex_parse(message)
-        if not result:
-            raise SignalParseError("Failed to parse signal")
-        return result
+    def _load_analyzers(self):
+        """Dynamically loads all analyzer classes from the 'analyzers' directory."""
+        analyzer_dir = os.path.join(os.path.dirname(__file__), "analyzers")
+        for filename in os.listdir(analyzer_dir):
+            if filename.endswith(".py") and not filename.startswith("__"):
+                module_name = f"src.analyzers.{filename[:-3]}"
+                try:
+                    module = importlib.import_module(module_name)
+                    for attr_name in dir(module):
+                        attr = getattr(module, attr_name)
+                        if isinstance(attr, type) and issubclass(attr, AbstractAnalyzer) and attr is not AbstractAnalyzer and attr is not DefaultAnalyzer:
+                            # Instantiate and store the analyzer, keyed by its class name (lowercased)
+                            # e.g., 'SomeChannelAnalyzer' becomes 'somechannelanalyzer'
+                            self._analyzers[attr.__name__.lower()] = attr()
+                except ImportError as e:
+                    print(f"Error loading analyzer from {filename}: {e}")
 
-    def _regex_parse(self, text: str) -> Optional[Dict[str, Any]]:
-        """Regex-based parser that builds structured JSON with confidence=100."""
-        t = text
+    async def analyze(self, message: str, channel: str) -> Dict[str, Any]:
+        """
+        Analyzes a message using a channel-specific analyzer if available,
+        otherwise falls back to the DefaultAnalyzer.
+        """
+        # Formatter channel name to match analyzer class name convention
+        # e.g., '@my_channel' becomes 'my_channel_analyzer'
+        analyzer_key = f"{channel.replace('@', '').lower()}_analyzer"
 
-        out = {
-            "action": None,
-            "base_currency": None,
-            "quote_currency": None,
-            "entry_price": None,
-            "entry_price_range": None,
-            "take_profit_levels": None,
-            "stop_loss": None,
-            "leverage": None,
-            "confidence": 100,  # always 100 now
-        }
+        analyzer = self._analyzers.get(analyzer_key)
 
-        # action
-        if re.search(r'Position:\s*LONG', t, re.I):
-            out["action"] = "BUY"
-        elif re.search(r'Position:\s*SHORT', t, re.I):
-            out["action"] = "SELL"
-        elif re.search(r'Take-?Profit target', t, re.I) or re.search(r'Profit:', t, re.I):
-            out["action"] = "SELL"
-
-        # pair
-        m = re.search(r'#?([A-Za-z0-9]+)\/([A-Za-z0-9]+)', t)
-        if m:
-            out["base_currency"] = m.group(1).upper()
-            out["quote_currency"] = m.group(2).upper()
-
-        # leverage
-        mlev = re.search(r'Leverage:\s*([^\n\r]+)', t, re.I)
-        if mlev:
-            out["leverage"] = mlev.group(1).strip()
-
-        # entry price range
-        mentry_range = re.search(r'Entries?:\s*([0-9]*\.?[0-9]+)\s*-\s*([0-9]*\.?[0-9]+)', t, re.I)
-        if mentry_range:
-            out["entry_price_range"] = [float(mentry_range.group(1)), float(mentry_range.group(2))]
+        if analyzer:
+            return await analyzer.analyze(message)
         else:
-            # single entry
-            mentry_single = re.search(r'Entries?:\s*([0-9]*\.?[0-9]+)', t, re.I)
-            if mentry_single:
-                out["entry_price"] = float(mentry_single.group(1))
-
-        # targets
-        targets_m = re.search(r'Targets?:\s*([^\n\r]+)', t, re.I)
-        if targets_m:
-            nums = re.findall(r'\d+\.\d+|\d+', targets_m.group(1))
-            if nums:
-                out["take_profit_levels"] = [float(n) for n in nums]
-        else:
-            tp_idx = re.search(r'Take-?Profit target[s]?\s*(\d+)', t, re.I)
-            if tp_idx:
-                out["take_profit_levels"] = int(tp_idx.group(1))
-
-        # stop loss
-        sl_m = re.search(r'Stop Loss:\s*([0-9]*\.?[0-9]+)', t, re.I)
-        if sl_m:
-            out["stop_loss"] = float(sl_m.group(1))
-
-        if out["action"] and out["base_currency"]:
-            return out
-        return None
+            # Fallback to default analyzer
+            return await DefaultAnalyzer().analyze(message)

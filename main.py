@@ -83,7 +83,7 @@ class TradingApp:
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")
 
         try:
-            parsed = await self.analyzer.analyze(message)
+            parsed = await self.analyzer.analyze(message, channel)
             self.logger.info(f"Parsed signal: {parsed}")
 
             if parsed and self.db:
