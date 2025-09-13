@@ -166,14 +166,29 @@ class TradingApp:
                     volume = order_value / max(1e-8, entry)
 
             else:  # side == "sell"
-                base_balance = balances.get(base, 0.0)
-                self.logger.info(f"Detected SELL signal for {base}. Current balance: {base_balance}")
-                if base_balance <= 0:
-                    self.logger.warning(f"Cannot place SELL order. You have no {base} to sell.")
+                # Check for last buy trade from the same channel
+                last_buy_trade = self.db.get_last_buy_trade(channel, base, quote)
+
+                if not last_buy_trade:
+                    self.logger.warning(f"No previous BUY trade found for {base}/{quote} from channel '{channel}'. Skipping SELL order.")
                     return
 
-                volume = base_balance
-                self.logger.info(f"Setting order volume to sell 100% of {base} balance: {volume:.8f}")
+                # Use the volume from the last buy trade
+                volume = last_buy_trade['volume']
+                base_balance = balances.get(base, 0.0)
+
+                self.logger.info(f"Found last BUY trade from '{channel}' for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
+
+                # Check if we have enough balance to sell
+                if base_balance < volume:
+                    self.logger.warning(f"Insufficient {base} balance to sell {volume:.8f}. Available: {base_balance:.8f}. Will sell available amount.")
+                    volume = base_balance
+
+                if volume <= 0:
+                    self.logger.warning(f"No {base} available to sell. Skipping.")
+                    return
+
+                self.logger.info(f"Setting SELL order volume to match last BUY from '{channel}': {volume:.8f} {base}")
 
             entry = parsed.get("entry_price")
             if entry is None and parsed.get("entry_price_range"):
