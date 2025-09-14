@@ -37,21 +37,21 @@ class DryRunDatabase:
                 balance REAL NOT NULL
             )
         """)
-        # self.cursor.execute("""
-        #     CREATE TABLE IF NOT EXISTS llm_responses (
-        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        #         action TEXT,
-        #         base_currency TEXT,
-        #         quote_currency TEXT,
-        #         confidence INTEGER,
-        #         entry_price_range TEXT,
-        #         leverage TEXT,
-        #         stop_loss REAL,
-        #         take_profit_targets TEXT,
-        #         take_profit_target INTEGER,
-        #         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT,
+                base_currency TEXT,
+                quote_currency TEXT,
+                confidence INTEGER,
+                entry_price_range TEXT,
+                leverage TEXT,
+                stop_loss REAL,
+                take_profit_targets TEXT,
+                take_profit_target INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
 
     def reset_tables(self):

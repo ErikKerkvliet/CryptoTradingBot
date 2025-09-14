@@ -38,20 +38,20 @@ class TradingDatabase:
                 balance REAL NOT NULL
             )
         """)
-        # self.cursor.execute("""
-        #     CREATE TABLE IF NOT EXISTS llm_responses (
-        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        #         action TEXT,
-        #         base_currency TEXT,
-        #         quote_currency TEXT,
-        #         confidence INTEGER,
-        #         entry_price_range TEXT,
-        #         leverage TEXT,
-        #         stop_loss REAL,
-        #         take_profit_targets TEXT,
-        #         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT,
+                base_currency TEXT,
+                quote_currency TEXT,
+                confidence INTEGER,
+                entry_price_range TEXT,
+                leverage TEXT,
+                stop_loss REAL,
+                take_profit_targets TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
 
     def sync_wallet(self, balances: Dict[str, float]):

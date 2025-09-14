@@ -91,13 +91,12 @@ class TradingApp:
             parsed = await self.analyzer.analyze(message, channel)
             self.logger.info(f"Parsed signal: {parsed}")
 
-            # --- Optional: Save parsed llm signal to DB ---
-            # if parsed and self.db:
-            #     try:
-            #         self.db.add_llm_response(parsed)
-            #         self.logger.info("✅ Successfully saved LLM response to the database.")
-            #     except Exception as db_err:
-            #         self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")
+            if parsed and self.db:
+                try:
+                    self.db.add_llm_response(parsed)
+                    self.logger.info("✅ Successfully saved LLM response to the database.")
+                except Exception as db_err:
+                    self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")
 
         except SignalParseError as e:
             self.logger.warning(f"Could not parse signal: {e}")
@@ -106,6 +105,9 @@ class TradingApp:
             self.logger.error(f"Unexpected error in signal analysis: {e}")
             return
 
+        if parsed is None:
+            self.logger.warning("Parsed signal is None, skipping.")
+            return
         conf = parsed.get("confidence", 0) or 0
         if conf < self.settings.MIN_CONFIDENCE_THRESHOLD:
             self.logger.info(f"Signal confidence {conf} below threshold {self.settings.MIN_CONFIDENCE_THRESHOLD}")
