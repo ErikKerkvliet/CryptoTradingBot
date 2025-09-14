@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     KRAKEN_API_SECRET: Optional[str] = None
     MEXC_API_KEY: Optional[str] = None
     MEXC_API_SECRET: Optional[str] = None
-    #OPENAI_API_KEY: str
+    OPENAI_API_KEY: str
 
     # -- Telegram API Settings --
     TELEGRAM_API_ID: int
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     MAX_POSITION_SIZE_PERCENT: float = 5.0  # Max % of quote currency balance to use for a trade
     ORDER_SIZE_USD: float = 0.0             # Fixed order size in USD (overrides percentage if > 0)
     MIN_CONFIDENCE_THRESHOLD: int = 80      # Minimum signal confidence to execute a trade (1-100)
-    MAX_DAILY_TRADES: int = 10              # Maximum number of trades to execute in a 24-hour period
+    MAX_DAILY_TRADES: int = 10              # Maximum number of BUY trades to execute in a 24-hour period (SELL trades don't count)
 
     # -- Futures-Specific Settings --
     DEFAULT_LEVERAGE: int = 10              # Default leverage if not specified in the signal

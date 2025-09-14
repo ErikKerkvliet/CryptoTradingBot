@@ -27,7 +27,7 @@ class TradingDatabase:
                 status TEXT NOT NULL,
                 take_profit REAL,
                 stop_loss REAL,
-                take_profit_level INTEGER,
+                take_profit_target INTEGER,
                 leverage INTEGER DEFAULT 0,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -48,7 +48,7 @@ class TradingDatabase:
         #         entry_price_range TEXT,
         #         leverage TEXT,
         #         stop_loss REAL,
-        #         take_profit_levels TEXT,
+        #         take_profit_targets TEXT,
         #         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         #     )
         # """)
@@ -69,7 +69,7 @@ class TradingDatabase:
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_level, leverage)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
@@ -82,7 +82,7 @@ class TradingDatabase:
             trade_data["status"],
             trade_data.get("take_profit"),
             trade_data.get("stop_loss"),
-            trade_data.get("take_profit_level"),
+            trade_data.get("take_profit_target"),
             trade_data.get("leverage", 0)
         ))
         self.conn.commit()
@@ -181,7 +181,7 @@ class TradingDatabase:
         """Adds a new LLM response to the database."""
         self.cursor.execute("""
             INSERT INTO llm_responses (action, base_currency, quote_currency, confidence, 
-                                     entry_price_range, leverage, stop_loss, take_profit_levels)
+                                     entry_price_range, leverage, stop_loss, take_profit_targets)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             response_data.get('action'),
@@ -191,7 +191,7 @@ class TradingDatabase:
             json.dumps(response_data.get('entry_price_range')),
             str(response_data.get('leverage')),
             response_data.get('stop_loss'),
-            json.dumps(response_data.get('take_profit_levels'))
+            json.dumps(response_data.get('take_profit_targets'))
         ))
         self.conn.commit()
 
@@ -202,7 +202,7 @@ class TradingDatabase:
 
         response = dict(zip(columns, row))
 
-        for field in ['entry_price_range', 'take_profit_levels']:
+        for field in ['entry_price_range', 'take_profit_targets']:
             if response.get(field):
                 try:
                     response[field] = json.loads(response[field])

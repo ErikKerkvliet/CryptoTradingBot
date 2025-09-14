@@ -195,16 +195,16 @@ class TradingApp:
                 entry = sum(parsed.get("entry_price_range")) / 2.0
 
             stop_loss = parsed.get("stop_loss")
-            take_profit_levels = parsed.get("take_profit_levels")
+            take_profit_targets = parsed.get("take_profit_targets")
             take_profit = None
-            take_profit_lever = None
+            take_profit_target = None
 
-            if take_profit_levels and len(take_profit_levels) >= 2:
-                take_profit = take_profit_levels[-2]
-                take_profit_lever = len(take_profit_levels) - 2
-            elif take_profit_levels:
-                take_profit = take_profit_levels[-1]
-                take_profit_lever = 0
+            if take_profit_targets and len(take_profit_targets) >= 3:
+                take_profit = take_profit_targets[-3]
+                take_profit_target = len(take_profit_targets) - 3
+            elif take_profit_targets:
+                take_profit = take_profit_targets[-1]
+                take_profit_target = 0
 
             # --- Futures Specific Logic ---
             leverage = 0
@@ -218,7 +218,7 @@ class TradingApp:
                         self.logger.info(f"Extracted leverage from signal: {leverage}x")
 
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
-            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_lever}), Leverage: {leverage or 'Default'}x")
+            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_target}), Leverage: {leverage or 'Default'}x")
 
             # The 'leverage' kwarg will be safely ignored by spot traders
             res = await self.trader.place_order(
@@ -230,7 +230,7 @@ class TradingApp:
                 telegram_channel=channel,
                 take_profit=take_profit,
                 stop_loss=stop_loss,
-                take_profit_level=take_profit_lever,
+                take_profit_target=take_profit_target,
                 leverage=leverage
             )
 
@@ -244,7 +244,7 @@ class TradingApp:
 
     async def run(self):
         self.logger.info("Starting trading application...")
-        self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}, Channels={self.settings.target_channels}, Max trades={self.settings.MAX_DAILY_TRADES}")
+        self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}, Channels={self.settings.target_channels}, Max daily BUY trades={self.settings.MAX_DAILY_TRADES}")
 
         if not self.settings.DRY_RUN:
             self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")

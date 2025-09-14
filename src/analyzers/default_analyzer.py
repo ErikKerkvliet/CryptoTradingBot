@@ -13,10 +13,43 @@ class DefaultAnalyzer(AbstractAnalyzer):
         This is the default analyzer used when no channel-specific
         analyzer is found.
         """
+        if not (self._is_trade_message(message, 'BUY') or self._is_trade_message(message, 'SELL')):
+            raise SignalParseError("Message does not appear to be a trade signal")
+
         result = self._regex_parse(message)
         if not result:
             raise SignalParseError("Failed to parse signal with DefaultAnalyzer")
         return result
+
+    @staticmethod
+    def _is_trade_message(message: str, message_type: str) -> bool:
+        message_lower = message.lower()
+
+        if message_type == 'BUY':
+            keywords = [
+                ('entry', 'entries', 'enter'),
+                ('target',),
+                ('buy', 'long'),
+                ('leverage',),
+                ('stop', 'loss', 'sl')
+            ]
+        elif message_type == 'SELL':
+            keywords = [
+                ('take', 'profit'),
+                ('achieved',),
+                ('period',),
+                ('%',),
+                ('✅',),
+            ]
+        else:
+            return False
+
+        substr_matches = sum(
+            any(keyword in message_lower for keyword in group)
+            for group in keywords
+        )
+
+        return substr_matches > 2
 
     def _regex_parse(self, text: str) -> Optional[Dict[str, Any]]:
         """Regex-based parser that builds structured JSON with confidence=100."""
@@ -28,7 +61,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
             "quote_currency": None,
             "entry_price": None,
             "entry_price_range": None,
-            "take_profit_levels": None,
+            "take_profit_targets": None,
             "stop_loss": None,
             "leverage": None,
             "confidence": 100,  # always 100 now
@@ -68,11 +101,11 @@ class DefaultAnalyzer(AbstractAnalyzer):
         if targets_m:
             nums = re.findall(r'\d+\.\d+|\d+', targets_m.group(1))
             if nums:
-                out["take_profit_levels"] = [float(n) for n in nums]
+                out["take_profit_targets"] = [float(n) for n in nums]
         else:
             tp_idx = re.search(r'Take-?Profit target[s]?\s*(\d+)', t, re.I)
             if tp_idx:
-                out["take_profit_levels"] = int(tp_idx.group(1))
+                out["take_profit_targets"] = int(tp_idx.group(1))
 
         # stop loss
         sl_m = re.search(r'Stop Loss:\s*([0-9]*\.?[0-9]+)', t, re.I)
