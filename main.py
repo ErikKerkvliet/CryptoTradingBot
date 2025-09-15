@@ -108,6 +108,7 @@ class TradingApp:
         if parsed is None:
             self.logger.warning("Parsed signal is None, skipping.")
             return
+
         conf = parsed.get("confidence", 0) or 0
         if conf < self.settings.MIN_CONFIDENCE_THRESHOLD:
             self.logger.info(f"Signal confidence {conf} below threshold {self.settings.MIN_CONFIDENCE_THRESHOLD}")
@@ -174,6 +175,35 @@ class TradingApp:
                 if not last_buy_trade:
                     self.logger.warning(f"No previous BUY trade found for {base}/{quote} from channel '{channel}'. Skipping SELL order.")
                     return
+
+                # Get current market price for profit check
+                current_market_price = await self.trader.get_market_price(validated_pair_str)
+                buy_price = last_buy_trade['price']
+
+                # ===== PROFIT CHECK =====
+                if buy_price and current_market_price:
+                    profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
+
+                    if current_market_price <= buy_price:
+                        self.logger.warning(f"🚫 SELL BLOCKED - Would result in loss!")
+                        self.logger.warning(f"   Buy price: {buy_price:.8f} {quote}")
+                        self.logger.warning(f"   Current price: {current_market_price:.8f} {quote}")
+                        self.logger.warning(f"   Loss would be: {profit_percentage:.2f}%")
+                        self.logger.warning(f"   Skipping SELL order to prevent loss.")
+                        return
+                    else:
+                        self.logger.info(f"✅ PROFIT CHECK PASSED")
+                        self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
+                        self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
+                        self.logger.info(f"   Profit: {profit_percentage:.2f}%")
+                else:
+                    self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
+                    self.logger.warning(f"   Buy price: {buy_price}, Current price: {current_market_price}")
+                    # You can choose to block the trade here or proceed with caution
+                    # For safety, let's block it:
+                    self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
+                    return
+                # ===== END PROFIT CHECK =====
 
                 # Use the volume from the last buy trade
                 volume = last_buy_trade['volume']

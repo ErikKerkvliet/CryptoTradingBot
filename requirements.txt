@@ -1,9 +1,22 @@
-telethon==1.33.4
+# Core Telegram functionality
+telethon==1.41.2
+
+# HTTP client library
 httpx==0.24.1
+
+# Environment variables
 python-dotenv==1.0.0
-openai==0.27.8
+
+# OpenAI API client - Updated to latest version
+openai==1.102.0
+
+# Cryptography for secure connections
 cryptography==41.0.4
+
+# Testing framework
 pytest==7.4.0
 pytest-asyncio==0.22.0
-pydantic==2.6.4
-pydantic-settings==2.2.1
+
+# Data validation and settings management - Updated to latest stable
+pydantic==2.11.9
+pydantic-settings==2.6.1

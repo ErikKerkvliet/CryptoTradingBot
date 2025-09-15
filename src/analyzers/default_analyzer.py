@@ -88,12 +88,13 @@ Return ONLY the JSON object, no other text."""
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-5-nano",
+                model="gpt-5-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_completion_tokens=3000
+                max_tokens=3000,
+                temperature=0.1
             )
 
             # Extract the JSON from the response
