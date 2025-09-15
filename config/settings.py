@@ -2,6 +2,13 @@
 from __future__ import annotations
 from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
+from pathlib import Path
+
+# --- MODIFICATION START ---
+# Define the project's base directory (the 'CryptoTradingBot-master' folder)
+# This ensures that database files and other resources are always located correctly.
+BASE_DIR = Path(__file__).resolve().parent.parent
+# --- MODIFICATION END ---
 
 class Settings(BaseSettings):
     """Defines the application's configuration settings using Pydantic."""

@@ -2,12 +2,14 @@
 import sqlite3
 from typing import Dict, Any, List, Optional
 import json
+from config.settings import BASE_DIR  # Import the base directory path
 
 
 class DryRunDatabase:
     def __init__(self, db_name: str = "dry_run.db"):
-        self.db_name = db_name
-        self.conn = sqlite3.connect(self.db_name)
+        # Use an absolute path to ensure the database is always in the project root
+        self.db_path = BASE_DIR / db_name
+        self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         self._create_tables()
 

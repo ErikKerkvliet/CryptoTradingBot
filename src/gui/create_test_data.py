@@ -6,13 +6,21 @@ import os
 import json
 from datetime import datetime, timedelta
 import random
+import sys
+
+# Add project root to path to allow importing config settings
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, project_root)
+
+from config.settings import BASE_DIR
 
 
 def create_test_database():
     """Create a test database with sample trading data."""
 
-    # Create dry_run.db with sample data
-    db_path = "dry_run.db"
+    # Use an absolute path to ensure the database is always in the project root
+    db_path = BASE_DIR / "dry_run.db"
 
     if os.path.exists(db_path):
         response = input(f"Database {db_path} already exists. Overwrite? (y/n): ")
@@ -168,7 +176,8 @@ def create_test_database():
 
 def create_sample_log_file():
     """Create a sample log file."""
-    log_file = "trading_bot.log"
+    # Place log file in the project root
+    log_file = BASE_DIR / "trading_bot.log"
 
     sample_logs = [
         "2024-01-15 10:30:15 INFO [trading_bot] Starting trading application...",

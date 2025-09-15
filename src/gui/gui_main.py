@@ -134,14 +134,20 @@ class TradingBotGUI:
             try:
                 # Try both database types
                 import sqlite3
-                if os.path.exists("dry_run.db"):
-                    self.db = self._create_simple_db_connection("dry_run.db")
+                # Define db paths relative to the project root to avoid ambiguity
+                dry_run_db_path = os.path.join(project_root, "dry_run.db")
+                live_db_path = os.path.join(project_root, "live_trading.db")
+
+                if os.path.exists(dry_run_db_path):
+                    self.db = self._create_simple_db_connection(dry_run_db_path)
                     self.db_type = "dry_run"
-                elif os.path.exists("live_trading.db"):
-                    self.db = self._create_simple_db_connection("live_trading.db")
+                    print(f"Found database at: {dry_run_db_path}")
+                elif os.path.exists(live_db_path):
+                    self.db = self._create_simple_db_connection(live_db_path)
                     self.db_type = "live"
+                    print(f"Found database at: {live_db_path}")
                 else:
-                    print("No database files found. GUI will show empty tables.")
+                    print("No database files found in project root. GUI will show empty tables.")
                     self.db_type = "none"
             except Exception as e:
                 print(f"Could not create database connection: {e}")
@@ -187,25 +193,18 @@ class TradingBotGUI:
     def monitor_log_file(self):
         """Monitor log file for changes and auto-update."""
         try:
-            log_files = [
-                "trading_bot.log",
-                "../trading_bot.log", 
-                "../../trading_bot.log",
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "trading_bot.log")
-            ]
-            
-            # Find the log file and monitor it
-            for log_file in log_files:
-                if os.path.exists(log_file):
-                    self.current_log_file = log_file
-                    self.last_log_size = os.path.getsize(log_file)
-                    print(f"📁 Monitoring log file: {log_file}")
-                    break
+            # Define log file path relative to project root
+            log_file_path = os.path.join(project_root, "trading_bot.log")
+
+            if os.path.exists(log_file_path):
+                self.current_log_file = log_file_path
+                self.last_log_size = os.path.getsize(log_file_path)
+                print(f"📁 Monitoring log file: {log_file_path}")
             else:
                 self.current_log_file = None
                 self.last_log_size = 0
-                print("📁 No existing log file found - will create when bot starts")
-            
+                print(f"📁 No log file found at {log_file_path} - will create when bot starts")
+
         except Exception as e:
             print(f"Error setting up log monitoring: {e}")
         
@@ -217,23 +216,16 @@ class TradingBotGUI:
         try:
             # First check if log file was created (if it didn't exist before)
             if not self.current_log_file:
-                log_files = [
-                    "trading_bot.log",
-                    "../trading_bot.log", 
-                    "../../trading_bot.log",
-                    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "trading_bot.log")
-                ]
-                
-                for log_file in log_files:
-                    if os.path.exists(log_file):
-                        self.current_log_file = log_file
-                        self.last_log_size = 0  # Start from beginning for new file
-                        print(f"📁 Found new log file: {log_file}")
-                        # Update the log status indicator
-                        if hasattr(self, 'log_status_label'):
-                            self.log_status_label.config(text="🟢")
-                        break
-            
+                # --- MODIFICATION START ---
+                log_file_path = os.path.join(project_root, "trading_bot.log")
+                if os.path.exists(log_file_path):
+                    self.current_log_file = log_file_path
+                    self.last_log_size = 0  # Start from beginning for new file
+                    print(f"📁 Found new log file: {log_file_path}")
+                    if hasattr(self, 'log_status_label'):
+                        self.log_status_label.config(text="🟢")
+                # --- MODIFICATION END ---
+
             if self.current_log_file and os.path.exists(self.current_log_file):
                 current_size = os.path.getsize(self.current_log_file)
                 if current_size > self.last_log_size:
@@ -247,7 +239,7 @@ class TradingBotGUI:
                                 self.log_text.insert(tk.END, new_content)
                                 if self.auto_scroll_var.get():
                                     self.log_text.see(tk.END)
-                                
+
                                 # Keep log size manageable
                                 lines = int(self.log_text.index('end-1c').split('.')[0])
                                 if lines > 1000:
@@ -619,35 +611,19 @@ class TradingBotGUI:
     def load_log_file(self):
         """Load existing log file content."""
         try:
-            # Try multiple possible log file locations
-            possible_logs = [
-                "trading_bot.log",
-                "../trading_bot.log",
-                "../../trading_bot.log",
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "trading_bot.log")
-            ]
+            # Use absolute path to the log file in the project root
+            log_file_path = os.path.join(project_root, "trading_bot.log")
 
-            log_content = ""
-            log_found = False
-
-            for log_file in possible_logs:
-                if os.path.exists(log_file):
-                    with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        log_content = f.read()
-                    log_found = True
-                    self.log_text.insert(tk.END, f"=== Loading from {log_file} ===\n")
-                    break
-
-            if log_found:
+            if os.path.exists(log_file_path):
+                with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    log_content = f.read()
+                self.log_text.insert(tk.END, f"=== Loading from {log_file_path} ===\n")
                 self.log_text.insert(tk.END, log_content)
                 if self.auto_scroll_var.get():
                     self.log_text.see(tk.END)
             else:
-                self.log_text.insert(tk.END, "No log file found. Checked locations:\n")
-                for log_file in possible_logs:
-                    self.log_text.insert(tk.END, f"  - {os.path.abspath(log_file)}\n")
+                self.log_text.insert(tk.END, f"No log file found at: {log_file_path}\n")
                 self.log_text.insert(tk.END, "\nStart the trading bot to generate logs.\n")
-
         except Exception as e:
             self.log_text.insert(tk.END, f"Error loading log file: {e}\n")
 

@@ -14,9 +14,13 @@ def setup_logger(name: str = "trading_bot", level: str = "INFO") -> logging.Logg
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    logger.addHandler(sh)
+    # Only add a StreamHandler if the root logger has no handlers.
+    # This prevents duplicate logs when the GUI is running the bot,
+    # as the GUI already configures a handler on the root logger.
+    if not logging.getLogger().handlers:
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
 
     fh = RotatingFileHandler(f"{name}.log", maxBytes=5 * 1024 * 1024, backupCount=3)
     fh.setFormatter(fmt)
