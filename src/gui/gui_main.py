@@ -130,6 +130,7 @@ class TradingBotGUI:
         self.settings_loaded = SETTINGS_LOADED
         self.bot_process = None
         self.bot_running = False
+        self.loaded_wallet_tab = False
         
         if not self.settings_loaded:
             # Try to create a minimal database connection for read-only access
@@ -1193,13 +1194,12 @@ class TradingBotGUI:
             messagebox.showerror("Error", f"Failed to filter trades: {e}")
 
     def refresh_wallet(self):
-        """Refresh the wallet table."""
+        """Refresh the wallet table with basic estimated values."""
         if not self.db:
             # Show message in empty table
             for item in self.wallet_tree.get_children():
                 self.wallet_tree.delete(item)
-            self.wallet_tree.insert('', tk.END, values=['No database', '0.00000000', '$0.00'])
-            self.total_value_label.config(text="Total Value: $0.00")
+            self.wallet_tree.insert('', tk.END, values=['No database', '', '', ''])
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🔴")
             return
@@ -1216,30 +1216,27 @@ class TradingBotGUI:
             # Get wallet data
             balances = self.db.get_balance()
 
-            total_usd_value = 0
-
-            # Populate wallet
+            # Populate wallet with just balances, no price estimates
             for currency, balance in balances.items():
                 if balance > 0:  # Only show non-zero balances
-                    # Estimate USD value (simplified)
-                    usd_value = balance if currency in ['USD', 'USDT', 'USDC'] else balance * 1.0  # Placeholder
-                    total_usd_value += usd_value
-
                     values = [
                         currency,
                         f"{balance:.8f}",
-                        f"${usd_value:.2f}"
+                        "",  # USD value is blank until "Refresh USD" is clicked
+                        ""   # USD price is blank until "Refresh USD" is clicked
                     ]
                     self.wallet_tree.insert('', tk.END, values=values)
 
-            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f}")
+            # Clear USD status
+            if hasattr(self, 'usd_status_label'):
+                self.usd_status_label.config(text="Use 💲 Refresh USD for real prices", foreground="gray")
 
             # Update status indicator
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🟢")
 
         except Exception as e:
-            self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '0.00000000', '$0.00'])
+            self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '', '', ''])
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🔴")
 
@@ -1422,7 +1419,9 @@ class TradingBotGUI:
             # Always refresh all tabs for live updates
             if self.db:
                 self.refresh_trades()
-                self.refresh_wallet() 
+                if not self.loaded_wallet_tab:
+                    self.refresh_wallet()
+                    self.loaded_wallet_tab = True
                 self.refresh_llm()
             
             # Update status bar with current time
