@@ -1,5 +1,5 @@
 # Core Telegram functionality
-telethon==1.41.2
+telethon>=1.41.0
 
 # HTTP client library
 httpx==0.24.1
@@ -11,7 +11,7 @@ python-dotenv==1.0.0
 openai==1.102.0
 
 # Cryptography for secure connections
-cryptography==41.0.4
+cryptography>=41.0.4
 
 # Testing framework
 pytest==7.4.0

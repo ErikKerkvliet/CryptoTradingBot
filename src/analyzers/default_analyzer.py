@@ -93,9 +93,7 @@ Return ONLY the JSON object, no other text."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_tokens=3000,
-                temperature=0.1
-            )
+                max_completion_tokens=3000            )
 
             # Extract the JSON from the response
             content = response.choices[0].message.content.strip()
