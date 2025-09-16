@@ -3,6 +3,7 @@ telethon>=1.41.0
 
 # HTTP client library
 httpx==0.24.1
+requests>=2.31.0
 
 # Environment variables
 python-dotenv==1.0.0
