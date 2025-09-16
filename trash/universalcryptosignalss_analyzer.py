@@ -1,7 +1,7 @@
 """Signal analyzer for the '@universalcryptosignalss' Telegram channel."""
 from typing import Dict, Any
-from .default_analyzer import DefaultAnalyzer
-from ..utils.exceptions import SignalParseError
+from src.analyzers.default_analyzer import DefaultAnalyzer
+from src.utils.exceptions import SignalParseError
 
 class UniversalCryptoSignalsSAnalyzer(DefaultAnalyzer):
     """
