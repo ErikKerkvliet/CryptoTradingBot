@@ -1,4 +1,4 @@
-"""Main application entrypoint orchestrating all components."""
+"""Updated main trading application with channel-specific balance management."""
 import asyncio
 import sys
 import os
@@ -17,7 +17,6 @@ except Exception as e:
 from src.utils.logger import setup_logger
 from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
-
 from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
 
@@ -26,9 +25,8 @@ if settings.DRY_RUN:
 else:
     from src.database import TradingDatabase
 
-# --- Dynamic Imports Based on Trading Mode ---
+# Dynamic Imports Based on Trading Mode
 if settings.TRADING_MODE.upper() == "FUTURES":
-    # For futures, we use a specific validator and MEXC's futures trader
     from src.futures.futures_pair_validator import FuturesPairValidator as PairValidator
     if not settings.DRY_RUN:
         from src.futures.mexc_futures_trader import MexcFuturesTrader as LiveTrader
@@ -42,6 +40,7 @@ else:  # SPOT trading
 
 logger = setup_logger(level=settings.LOG_LEVEL)
 
+
 class TradingApp:
     def __init__(self):
         self.settings = settings
@@ -50,17 +49,24 @@ class TradingApp:
         self.db = TradingDatabase()
         self.trader = None
 
-        # --- FIX: Instantiate the correct validator with required arguments ---
+        # Initialize channel configurations for dry run
+        if self.settings.DRY_RUN:
+            self.channel_configs = self._get_channel_configs()
+        else:
+            self.channel_configs = {}
+
+        # Instantiate the correct validator with required arguments
         if self.settings.TRADING_MODE.upper() == "FUTURES":
-            self.validator = PairValidator()  # FuturesPairValidator requires no arguments
-        else: # SPOT
-            self.validator = PairValidator(self.settings.EXCHANGE)  # Spot PairValidator needs the exchange name
+            self.validator = PairValidator()
+        else:  # SPOT
+            self.validator = PairValidator(self.settings.EXCHANGE)
 
         if self.settings.DRY_RUN:
             self.logger.info(f"🤖 Starting in DRY RUN mode for {self.settings.TRADING_MODE} trading.")
             self.trader = DryRunTrader(
                 exchange=settings.EXCHANGE,
-                trading_mode=settings.TRADING_MODE
+                trading_mode=settings.TRADING_MODE,
+                channel_configs=self.channel_configs
             )
         else:
             self.logger.info(f"⚡ Starting in LIVE {self.settings.TRADING_MODE} mode on {self.settings.EXCHANGE}.")
@@ -83,6 +89,24 @@ class TradingApp:
             self.logger
         )
         self.daily_trades = 0
+
+    def _get_channel_configs(self) -> dict:
+        """Get channel configurations with starting balances."""
+        # You can customize these starting balances per channel
+        default_configs = {
+            "testchannel": {"USDT": 1000.0},
+            "mycryptobottestchannel": {"USDT": 1500.0},
+            "universalcryptosignalss": {"USDT": 2000.0}
+        }
+
+        # Add any channels from settings that aren't in default configs
+        for channel in self.settings.target_channels:
+            channel_name = str(channel).replace('@', '').lower()
+            if channel_name not in default_configs:
+                default_configs[channel_name] = {"USDT": 1000.0}
+
+        self.logger.info(f"📊 Channel configurations: {default_configs}")
+        return default_configs
 
     async def on_message(self, message: str, channel: str):
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")
@@ -136,8 +160,22 @@ class TradingApp:
             return
 
         try:
-            balances = await self.trader.get_balance()
-            self.logger.info(f"Current balances: {balances}")
+            # Get channel-specific balance if in dry run mode
+            if self.settings.DRY_RUN:
+                balances = await self.trader.get_balance(channel)
+                balance_source = f"channel '{channel}'"
+
+                # Auto-initialize channel if it doesn't exist
+                if not balances:
+                    self.logger.info(f"🔧 Initializing wallet for new channel: {channel}")
+                    if hasattr(self.trader.wallet, 'initialize_channel_if_needed'):
+                        self.trader.wallet.initialize_channel_if_needed(channel)
+                        balances = await self.trader.get_balance(channel)
+            else:
+                balances = await self.trader.get_balance()
+                balance_source = f"{self.settings.EXCHANGE} account"
+
+            self.logger.info(f"Current balances in {balance_source}: {balances}")
 
             side = "buy" if parsed.get("action") == "BUY" else "sell"
             volume = 0.0
@@ -152,7 +190,7 @@ class TradingApp:
                 else:
                     max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
                     order_value = quote_balance * max_pct
-                    self.logger.info(f"Calculating order size based on {self.settings.MAX_POSITION_SIZE_PERCENT}% of {quote} balance.")
+                    self.logger.info(f"Calculating order size based on {self.settings.MAX_POSITION_SIZE_PERCENT}% of {quote} balance in {balance_source}.")
 
                 if order_value <= 0:
                     self.logger.warning(f"Calculated order value is {order_value:.2f}. Must be positive. Skipping.")
@@ -180,7 +218,7 @@ class TradingApp:
                 current_market_price = await self.trader.get_market_price(validated_pair_str)
                 buy_price = last_buy_trade['price']
 
-                # ===== PROFIT CHECK =====
+                # Profit check
                 if buy_price and current_market_price:
                     profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
 
@@ -198,12 +236,8 @@ class TradingApp:
                         self.logger.info(f"   Profit: {profit_percentage:.2f}%")
                 else:
                     self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
-                    self.logger.warning(f"   Buy price: {buy_price}, Current price: {current_market_price}")
-                    # You can choose to block the trade here or proceed with caution
-                    # For safety, let's block it:
                     self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
                     return
-                # ===== END PROFIT CHECK =====
 
                 # Use the volume from the last buy trade
                 volume = last_buy_trade['volume']
@@ -238,12 +272,11 @@ class TradingApp:
                 take_profit = take_profit_targets[-1]
                 take_profit_target = 0
 
-            # --- Futures Specific Logic ---
+            # Futures Specific Logic
             leverage = 0
             if self.settings.TRADING_MODE.upper() == "FUTURES":
                 leverage_str = parsed.get("leverage")
                 if leverage_str:
-                    # Extracts numbers from strings like "Cross 20x"
                     leverage_digits = re.search(r'(\d+)', str(leverage_str))
                     if leverage_digits:
                         leverage = int(leverage_digits.group(1))
@@ -251,8 +284,9 @@ class TradingApp:
 
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
             self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_target}), Leverage: {leverage or 'Default'}x")
+            self.logger.info(f"💰 Using balance from: {balance_source}")
 
-            # The 'leverage' kwarg will be safely ignored by spot traders
+            # Place the order (leverage kwarg will be safely ignored by spot traders)
             res = await self.trader.place_order(
                 pair=validated_pair_str,
                 side=side,
@@ -276,7 +310,14 @@ class TradingApp:
 
     async def run(self):
         self.logger.info("Starting trading application...")
-        self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}, Channels={self.settings.target_channels}, Max daily BUY trades={self.settings.MAX_DAILY_TRADES}")
+        self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}")
+        self.logger.info(f"Channels={self.settings.target_channels}, Max daily BUY trades={self.settings.MAX_DAILY_TRADES}")
+
+        if self.settings.DRY_RUN:
+            self.logger.info(f"💰 Channel-specific wallets initialized with configurations:")
+            for channel, config in self.channel_configs.items():
+                for currency, amount in config.items():
+                    self.logger.info(f"   📺 {channel}: {amount} {currency}")
 
         if not self.settings.DRY_RUN:
             self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")
@@ -293,6 +334,7 @@ class TradingApp:
             await self.telegram.start(self.on_message)
         except Exception as e:
             self.logger.exception(f"Error starting telegram monitor: {e}")
+
 
 if __name__ == "__main__":
     app = TradingApp()

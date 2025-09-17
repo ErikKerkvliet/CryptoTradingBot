@@ -1,4 +1,4 @@
-"""Simulates a trader for dry-run mode, fetching live prices from a real exchange."""
+"""Enhanced dry run trader with channel-specific balance management."""
 from typing import Dict, Any, Optional
 import httpx
 from ..utils.exceptions import InsufficientBalanceError
@@ -8,23 +8,35 @@ from .wallet import VirtualWallet
 
 class DryRunTrader:
     """
-    Simulates trading operations for both SPOT and FUTURES.
-    Fetches live market prices from the configured exchange to make the simulation realistic.
+    Enhanced simulated trader that manages channel-specific wallets.
+    Each channel has its own isolated balance and can only trade with its own funds.
     """
 
-    def __init__(self, exchange: str = "KRAKEN", trading_mode: str = "SPOT", api_key: str = None, api_secret: str = None):
+    def __init__(self, exchange: str = "KRAKEN", trading_mode: str = "SPOT",
+                 api_key: str = None, api_secret: str = None,
+                 channel_configs: Dict[str, Dict[str, float]] = None):
         self.exchange = exchange.upper()
         self.trading_mode = trading_mode.upper()
         self.api_key = api_key
         self.api_secret = api_secret
         self.db = DryRunDatabase()
-        self.wallet = VirtualWallet(self.db)
+
+        # Initialize wallet with channel configurations
+        self.wallet = VirtualWallet(self.db, channel_configs=channel_configs)
         self.wallet.reset()
+
         self._client = httpx.AsyncClient(timeout=15)
 
-    async def get_balance(self) -> Dict[str, float]:
-        """Get the virtual wallet balance."""
-        return self.wallet.get_balance()
+    async def get_balance(self, channel: str = None) -> Dict[str, float]:
+        """
+        Get balance for a specific channel or global balance.
+        If channel is provided, returns that channel's isolated balance.
+        """
+        if channel:
+            return self.wallet.get_channel_balance(channel)
+        else:
+            # Return global balance for backwards compatibility
+            return self.wallet.get_balance()
 
     async def get_market_price(self, pair: str) -> float:
         """Get the current market price from the configured exchange and mode."""
@@ -74,7 +86,6 @@ class DryRunTrader:
         """Get the current market price for a futures contract from MEXC."""
         try:
             url = "https://contract.mexc.com/api/v1/contract/ticker"
-            # Futures pair format is like BTC_USDT
             params = {"symbol": pair}
             response = await self._client.get(url, params=params)
             response.raise_for_status()
@@ -109,8 +120,22 @@ class DryRunTrader:
                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
                           take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
                           take_profit_target: Optional[int] = None, leverage: int = 0) -> Dict[str, Any]:
-        """Simulate placing an order and record it in the database."""
-        balances = self.wallet.get_balance()
+        """
+        Simulate placing an order with channel-specific balance management.
+        Each channel can only use its own isolated funds.
+        """
+        # Auto-initialize channel wallet if it doesn't exist
+        if telegram_channel:
+            self.wallet.initialize_channel_if_needed(telegram_channel)
+
+        # Get the appropriate balance (channel-specific or global)
+        if telegram_channel:
+            balances = self.wallet.get_channel_balance(telegram_channel)
+            balance_source = f"channel '{telegram_channel}'"
+        else:
+            balances = self.wallet.get_balance()
+            balance_source = "global wallet"
+
         base_currency, quote_currency = self._split_pair(pair)
 
         if ordertype == "market" and price is None:
@@ -123,17 +148,55 @@ class DryRunTrader:
             leverage_used = leverage if leverage > 0 else 1
             cost /= leverage_used
 
-        if side.lower() == "buy":
-            if balances.get(quote_currency, 0) < cost:
-                raise InsufficientBalanceError(f"Insufficient {quote_currency} for the trade. Need {cost:.2f}, have {balances.get(quote_currency, 0):.2f}")
-            self.wallet.update_balance(quote_currency, balances[quote_currency] - cost)
-            self.wallet.update_balance(base_currency, balances.get(base_currency, 0) + volume)
-        else:  # Sell
-            if balances.get(base_currency, 0) < volume:
-                raise InsufficientBalanceError(f"Insufficient {base_currency} to sell. Need {volume}, have {balances.get(base_currency, 0)}")
-            self.wallet.update_balance(base_currency, balances[base_currency] - volume)
-            self.wallet.update_balance(quote_currency, balances.get(quote_currency, 0) + cost)
+        print(f"💰 Using {balance_source} - Available balances: {balances}")
 
+        if side.lower() == "buy":
+            available_quote = balances.get(quote_currency, 0)
+            if available_quote < cost:
+                raise InsufficientBalanceError(
+                    f"Insufficient {quote_currency} in {balance_source} for the trade. "
+                    f"Need {cost:.2f}, have {available_quote:.2f}"
+                )
+
+            # Update balances
+            new_quote_balance = available_quote - cost
+            new_base_balance = balances.get(base_currency, 0) + volume
+
+            if telegram_channel:
+                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
+                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
+            else:
+                self.wallet.update_balance(quote_currency, new_quote_balance)
+                self.wallet.update_balance(base_currency, new_base_balance)
+
+            print(f"✅ BUY executed: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
+            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
+            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
+
+        else:  # Sell
+            available_base = balances.get(base_currency, 0)
+            if available_base < volume:
+                raise InsufficientBalanceError(
+                    f"Insufficient {base_currency} in {balance_source} to sell. "
+                    f"Need {volume}, have {available_base}"
+                )
+
+            # Update balances
+            new_base_balance = available_base - volume
+            new_quote_balance = balances.get(quote_currency, 0) + cost
+
+            if telegram_channel:
+                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
+                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
+            else:
+                self.wallet.update_balance(base_currency, new_base_balance)
+                self.wallet.update_balance(quote_currency, new_quote_balance)
+
+            print(f"✅ SELL executed: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
+            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
+            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
+
+        # Record the trade in database
         trade_data = {
             "base_currency": base_currency,
             "quote_currency": quote_currency,
@@ -151,6 +214,26 @@ class DryRunTrader:
         self.db.add_trade(trade_data)
 
         return {"status": "simulated_open", **trade_data}
+
+    def get_channel_performance_summary(self) -> Dict[str, Any]:
+        """Get performance summary for all channels."""
+        summary = {}
+
+        # Get all unique channels
+        self.db.cursor.execute("""
+            SELECT DISTINCT telegram_channel FROM wallet 
+            WHERE telegram_channel IS NOT NULL
+        """)
+        channels = [row[0] for row in self.db.cursor.fetchall()]
+
+        for channel in channels:
+            summary[channel] = self.wallet.get_channel_performance(channel)
+
+        return summary
+
+    def get_all_balances(self) -> Dict[str, Dict[str, float]]:
+        """Get all balances organized by channel."""
+        return self.wallet.get_all_balances()
 
     async def close(self):
         """Close the database and client connections."""

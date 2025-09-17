@@ -544,10 +544,25 @@ class TradingBotGUI:
         trades_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def create_wallet_tab(self):
-        """Create the wallet database table tab."""
+        """Create the enhanced wallet table tab with channel support."""
         wallet_frame = ttk.Frame(self.notebook)
         self.notebook.add(wallet_frame, text="💰 Wallet")
 
+        # Import and use the enhanced wallet tab
+        try:
+            from src.gui.enhanced_wallet_tab import EnhancedWalletTab
+            self.enhanced_wallet = EnhancedWalletTab(
+                wallet_frame,
+                self.db,
+                status_callback=lambda msg: self.status_bar.config(text=msg)
+            )
+
+        except ImportError:
+            # Fallback to basic wallet tab if enhanced version not available
+            self.create_basic_wallet_tab(wallet_frame)
+
+    def create_basic_wallet_tab(self, wallet_frame):
+        """Fallback basic wallet tab with channel column."""
         # Control buttons
         control_frame = ttk.Frame(wallet_frame)
         control_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -556,31 +571,35 @@ class TradingBotGUI:
         self.wallet_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
         self.wallet_status_label.pack(side=tk.LEFT, padx=2)
 
-        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet_with_channels).pack(side=tk.LEFT, padx=5)
 
-        # Add USD value refresh button
-        self.usd_refresh_button = ttk.Button(control_frame, text="💲 Refresh USD",
-                                             command=self.refresh_wallet_with_real_prices)
-        self.usd_refresh_button.pack(side=tk.LEFT, padx=5)
+        # Channel filter
+        ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
+        self.wallet_channel_filter = ttk.Combobox(control_frame, width=20)
+        self.wallet_channel_filter.pack(side=tk.LEFT, padx=5)
+        self.wallet_channel_filter.bind('<<ComboboxSelected>>', self.filter_wallet_by_channel)
 
         # Total value label
         self.total_value_label = ttk.Label(control_frame, text="Total Value: Calculating...",
                                            font=('Arial', 10, 'bold'))
         self.total_value_label.pack(side=tk.RIGHT, padx=5)
 
-        # Status label for USD refresh
-        self.usd_status_label = ttk.Label(control_frame, text="", font=('Arial', 9), foreground="gray")
-        self.usd_status_label.pack(side=tk.RIGHT, padx=5)
-
-        # Wallet treeview
+        # Wallet treeview with channel column
         self.wallet_tree = ttk.Treeview(wallet_frame, show='headings')
         self.wallet_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Configure wallet columns
-        wallet_columns = ['Currency', 'Balance', 'USD Value (Est.)', 'USD Price']
+        # Configure wallet columns with channel
+        wallet_columns = ['Channel', 'Currency', 'Balance', 'USD Value (Est.)', 'P&L %']
         self.wallet_tree['columns'] = wallet_columns
 
-        column_widths = {'Currency': 100, 'Balance': 150, 'USD Value (Est.)': 120, 'USD Price': 100}
+        column_widths = {
+            'Channel': 150,
+            'Currency': 100,
+            'Balance': 150,
+            'USD Value (Est.)': 120,
+            'P&L %': 100
+        }
+
         for col in wallet_columns:
             self.wallet_tree.heading(col, text=col)
             self.wallet_tree.column(col, width=column_widths.get(col, 100))
@@ -589,6 +608,206 @@ class TradingBotGUI:
         wallet_scrollbar = ttk.Scrollbar(wallet_frame, orient=tk.VERTICAL, command=self.wallet_tree.yview)
         self.wallet_tree.configure(yscrollcommand=wallet_scrollbar.set)
         wallet_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def refresh_wallet_with_channels(self):
+        """Enhanced wallet refresh with channel support."""
+        if not self.db:
+            self._show_wallet_error("No database connection")
+            return
+
+        try:
+            self.wallet_status_label.config(text="🟡")
+
+            # Clear existing items
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            # Get wallet data with channel information
+            if hasattr(self.db, 'get_all_channel_balances'):
+                wallet_data = self.db.get_all_channel_balances()
+            else:
+                # Fallback for basic database
+                wallet_data = self._get_basic_wallet_data()
+
+            # Update channel filter
+            channels = set(['All'])
+            for item in wallet_data:
+                channels.add(item.get('channel', 'global'))
+
+            self.wallet_channel_filter['values'] = sorted(list(channels))
+            if not self.wallet_channel_filter.get():
+                self.wallet_channel_filter.set('All')
+
+            # Populate wallet
+            total_usd_value = 0
+            for item in wallet_data:
+                if item['balance'] > 0:
+                    channel = item.get('channel', 'global')
+                    currency = item['currency']
+                    balance = item['balance']
+
+                    # Estimate USD value
+                    usd_value = self._estimate_usd_value(currency, balance)
+                    total_usd_value += usd_value
+
+                    # Calculate P&L percentage
+                    pnl_pct = self._calculate_channel_pnl(item, currency, balance)
+
+                    values = [
+                        channel,
+                        currency,
+                        f"{balance:.8f}",
+                        f"${usd_value:.2f}",
+                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+
+            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
+            self.wallet_status_label.config(text="🟢")
+
+        except Exception as e:
+            self._show_wallet_error(f'Error: {e}')
+
+    def filter_wallet_by_channel(self, event=None):
+        """Filter wallet by selected channel."""
+        if not self.db:
+            return
+
+        try:
+            selected_channel = self.wallet_channel_filter.get()
+
+            # Clear existing items
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            # Get and filter wallet data
+            if hasattr(self.db, 'get_all_channel_balances'):
+                all_wallet_data = self.db.get_all_channel_balances()
+            else:
+                all_wallet_data = self._get_basic_wallet_data()
+
+            if selected_channel == 'All':
+                filtered_data = all_wallet_data
+            else:
+                filtered_data = [item for item in all_wallet_data
+                                 if item.get('channel', 'global') == selected_channel]
+
+            # Populate filtered data
+            for item in filtered_data:
+                if item['balance'] > 0:
+                    channel = item.get('channel', 'global')
+                    currency = item['currency']
+                    balance = item['balance']
+
+                    usd_value = self._estimate_usd_value(currency, balance)
+                    pnl_pct = self._calculate_channel_pnl(item, currency, balance)
+
+                    values = [
+                        channel,
+                        currency,
+                        f"{balance:.8f}",
+                        f"${usd_value:.2f}",
+                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+
+            self.status_bar.config(text=f"Filtered wallet: {len(filtered_data)} records for {selected_channel}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to filter wallet: {e}")
+
+    def _get_basic_wallet_data(self):
+        """Get wallet data from basic database structure."""
+        try:
+            # Try to get channel-specific data first
+            self.db.cursor.execute("""
+                SELECT currency, balance, telegram_channel 
+                FROM wallet 
+                ORDER BY telegram_channel, currency
+            """)
+
+            wallet_data = []
+            for row in self.db.cursor.fetchall():
+                wallet_data.append({
+                    'currency': row[0],
+                    'balance': row[1],
+                    'channel': row[2] or 'global',
+                    'start_amount': None,
+                    'start_currency': None
+                })
+            return wallet_data
+        except:
+            # Ultimate fallback
+            balances = self.db.get_balance() if hasattr(self.db, 'get_balance') else {}
+            return [{
+                'currency': curr,
+                'balance': bal,
+                'channel': 'global',
+                'start_amount': None,
+                'start_currency': None
+            } for curr, bal in balances.items()]
+
+    def _estimate_usd_value(self, currency, balance):
+        """Simple USD value estimation."""
+        if currency in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI']:
+            return balance
+        elif currency == 'EUR':
+            return balance * 1.1
+        elif currency == 'GBP':
+            return balance * 1.25
+        else:
+            # Simple estimates for major cryptos
+            rates = {
+                'BTC': 43000, 'ETH': 2500, 'ADA': 0.45, 'XRP': 0.55,
+                'LTC': 75, 'DOT': 7, 'LINK': 15, 'UNI': 6
+            }
+            return balance * rates.get(currency, 1.0)
+
+    def _calculate_channel_pnl(self, item, currency, balance):
+        """Calculate P&L percentage for channel."""
+        try:
+            if (item.get('start_currency') == currency and
+                    item.get('start_amount') and
+                    item.get('start_amount') > 0):
+                start_amount = item['start_amount']
+                pnl = balance - start_amount
+                return (pnl / start_amount) * 100
+            return None
+        except:
+            return None
+
+    def _show_wallet_error(self, error_msg):
+        """Show error in wallet table."""
+        for item in self.wallet_tree.get_children():
+            self.wallet_tree.delete(item)
+        self.wallet_tree.insert('', tk.END, values=[error_msg, '', '', '', ''])
+        self.wallet_status_label.config(text="🔴")
+
+    # Add to the auto_refresh method:
+    def auto_refresh(self):
+        """Enhanced auto-refresh with channel support."""
+        try:
+            if self.db:
+                self.refresh_trades()
+
+                # Use enhanced wallet refresh if available
+                if hasattr(self, 'enhanced_wallet'):
+                    self.enhanced_wallet.refresh_wallet()
+                else:
+                    self.refresh_wallet_with_channels()
+
+                self.refresh_llm()
+
+            # Update status bar
+            current_time = datetime.now().strftime("%H:%M:%S")
+            connection_status = "🟢 LIVE" if self.bot_running else ("🟡 MONITORING" if self.db else "🔴 NO DATA")
+            self.status_bar.config(text=f"Last refresh: {current_time} | Status: {connection_status}")
+
+        except Exception as e:
+            print(f"Auto-refresh error: {e}")
+
+        # Schedule next auto-refresh
+        self.root.after(self.auto_refresh_interval, self.auto_refresh)
 
     def refresh_wallet_with_real_prices(self):
         """Refresh wallet with real USD prices from market APIs."""
