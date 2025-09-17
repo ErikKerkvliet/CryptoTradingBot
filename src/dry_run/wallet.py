@@ -16,8 +16,7 @@ class VirtualWallet:
         """
         self.db = db
         if default_balances is None:
-            self.default_balances = {"USD": 1000.0, "USDC": 1000.0, "EUR": 1000.0,
-                                     "BTC": 0.1, "ETH": 1.0, "XRP": 500.0, "USDT": 1000.0}
+            self.default_balances = {"USDT": 1000.0}
         else:
             self.default_balances = default_balances
 

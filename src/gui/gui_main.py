@@ -26,16 +26,16 @@ try:
     # Import from the project root level
     from config.settings import settings
     settings.validate_required_fields()  # This will catch any missing required fields
-    
+
     if settings.DRY_RUN:
         from src.dry_run.database import DryRunDatabase as TradingDatabase
     else:
         from src.database import TradingDatabase
-        
+
     SETTINGS_LOADED = True
     print(f"✅ Settings loaded successfully from {project_root}/.env")
     print(f"   MODE: {settings.TRADING_MODE}, EXCHANGE: {settings.EXCHANGE}, DRY_RUN: {settings.DRY_RUN}")
-    
+
 except Exception as e:
     print(f"❌ Could not load settings - {e}")
     print(f"   Looked for .env file in: {project_root}")
@@ -50,11 +50,11 @@ finally:
 
 class LogHandler(logging.Handler):
     """Custom logging handler that sends logs to the GUI."""
-    
+
     def __init__(self, gui_queue):
         super().__init__()
         self.gui_queue = gui_queue
-        
+
     def emit(self, record):
         try:
             # Format the log message
@@ -67,22 +67,22 @@ class LogHandler(logging.Handler):
 
 class LogCapture:
     """Captures stdout/stderr and sends it to both GUI and original streams."""
-    
+
     def __init__(self, gui_queue, original_stream=None):
         self.gui_queue = gui_queue
         self.original_stream = original_stream
-        
+
         # Try to also write to log file
         try:
             self.log_file = open("trading_bot.log", "a", encoding="utf-8")
         except:
             self.log_file = None
-    
+
     def write(self, message):
         if message.strip():  # Don't send empty lines
             # Send to GUI (without level since this is stdout/stderr)
             self.gui_queue.put(('log', message))
-            
+
             # Also write to original stream (console)
             if self.original_stream:
                 try:
@@ -90,7 +90,7 @@ class LogCapture:
                     self.original_stream.flush()
                 except:
                     pass
-            
+
             # Write to log file
             if self.log_file:
                 try:
@@ -98,7 +98,7 @@ class LogCapture:
                     self.log_file.flush()
                 except:
                     pass
-    
+
     def flush(self):
         if self.original_stream:
             try:
@@ -110,7 +110,7 @@ class LogCapture:
                 self.log_file.flush()
             except:
                 pass
-    
+
     def close(self):
         if self.log_file:
             try:
@@ -123,7 +123,7 @@ class TradingBotGUI:
     def __init__(self, root, run_bot=False):
         self.root = root
         self.run_bot = run_bot
-        
+
         # Initialize database connection and type first
         self.db = None
         self.db_type = "none"
@@ -131,7 +131,7 @@ class TradingBotGUI:
         self.bot_process = None
         self.bot_running = False
         self.loaded_wallet_tab = False
-        
+
         if not self.settings_loaded:
             # Try to create a minimal database connection for read-only access
             try:
@@ -162,37 +162,37 @@ class TradingBotGUI:
             except Exception as e:
                 messagebox.showerror("Database Error", f"Failed to connect to database: {e}")
                 self.db_type = "none"
-        
+
         # Set title based on mode
         mode_text = "INTEGRATED BOT" if run_bot else f"{self.db_type.upper() if self.db_type != 'none' else 'NO DB'}"
         self.root.title(f"Trading Bot Monitor ({mode_text})")
         self.root.geometry("1200x800")
-        
+
         # Queue for thread-safe GUI updates
         self.gui_queue = queue.Queue()
-        
+
         # Log capture for integrated bot
         if run_bot:
             self.log_capture = None  # Will be initialized when bot starts
-        
+
         # Create the main interface
         self.create_widgets()
-        
+
         # Start the GUI update loop
         self.update_gui()
-        
+
         # Start bot if requested
         if run_bot and SETTINGS_LOADED:
             self.start_integrated_bot()
-        
+
         # Auto-refresh data more frequently
         self.auto_refresh_interval = 2000  # 2 seconds for live updates
         self.auto_refresh()
-        
+
         # Live log monitoring (for non-integrated mode)
         if not self.run_bot:
             self.monitor_log_file()
-    
+
     def monitor_log_file(self):
         """Monitor log file for changes and auto-update."""
         try:
@@ -210,10 +210,10 @@ class TradingBotGUI:
 
         except Exception as e:
             print(f"Error setting up log monitoring: {e}")
-        
+
         # Schedule next check
         self.root.after(500, self.check_log_updates)  # Check every 0.5 seconds for faster updates
-    
+
     def check_log_updates(self):
         """Check if log file has been updated."""
         try:
@@ -247,23 +247,23 @@ class TradingBotGUI:
                                 lines = int(self.log_text.index('end-1c').split('.')[0])
                                 if lines > 1000:
                                     self.log_text.delete('1.0', f'{lines-1000}.0')
-                            
-                            # Update log status indicator  
+
+                            # Update log status indicator
                             if hasattr(self, 'log_status_label'):
                                 self.log_status_label.config(text="🟢")
-                    
+
                     self.last_log_size = current_size
                 elif current_size < self.last_log_size:
                     # File was truncated or rotated, start over
                     self.last_log_size = 0
-                    
+
         except Exception as e:
             if hasattr(self, 'log_status_label'):
                 self.log_status_label.config(text="🔴")
-        
+
         # Schedule next check
         self.root.after(500, self.check_log_updates)
-    
+
     def start_integrated_bot(self):
         """Start the trading bot in a separate thread."""
         def run_bot():
@@ -954,15 +954,21 @@ class TradingBotGUI:
             for item in self.wallet_tree.get_children():
                 self.wallet_tree.delete(item)
 
-            # Populate wallet with real prices
+            # Populate wallet with real prices (sorted by USD value)
             wallet_data = result['wallet_data']
             total_usd_value = result['total_usd_value']
 
             for item in wallet_data:
+                # Color code the USD value based on whether we got a real price
+                usd_value_text = f"${item['usd_value']:.2f}"
+                if item['usd_price'] == 0 and item['currency'] not in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD',
+                                                                       'USDD']:
+                    usd_value_text += " (est.)"  # Mark estimated values
+
                 values = [
                     item['currency'],
                     f"{item['balance']:.8f}",
-                    f"${item['usd_value']:.2f}",
+                    usd_value_text,
                     f"${item['usd_price']:.2f}" if item['usd_price'] > 0 else "N/A"
                 ]
                 self.wallet_tree.insert('', tk.END, values=values)
@@ -970,16 +976,33 @@ class TradingBotGUI:
             # Update total value
             self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f}")
 
-            # Update status
+            # Update status with detailed information and data source
             updated_count = result.get('updated_count', 0)
-            if updated_count > 0:
-                self.usd_status_label.config(text=f"Updated {updated_count} prices", foreground="green")
+            total_cryptos = result.get('total_cryptos', 0)
+            failed_count = result.get('failed_count', 0)
+            source = result.get('source', 'unknown')
+
+            if total_cryptos > 0:
+                if failed_count == 0:
+                    status_text = f"✅ Updated all {updated_count} prices from {source}"
+                    status_color = "green"
+                elif updated_count > 0:
+                    status_text = f"⚠️ Updated {updated_count}/{total_cryptos} prices from {source} ({failed_count} failed)"
+                    status_color = "orange"
+                else:
+                    status_text = f"❌ Failed to get any prices from {source}"
+                    status_color = "red"
             else:
-                self.usd_status_label.config(text="No crypto prices to fetch", foreground="gray")
+                status_text = "Only stablecoins/fiat found"
+                status_color = "gray"
+
+            self.usd_status_label.config(text=status_text, foreground=status_color)
 
         except Exception as e:
             self.usd_status_label.config(text=f"Display error: {str(e)[:30]}...", foreground="red")
             print(f"Error updating wallet display: {e}")
+            import traceback
+            traceback.print_exc()
 
     def refresh_wallet(self):
         """Refresh the wallet table with basic estimated values."""
@@ -1049,7 +1072,7 @@ class TradingBotGUI:
                 self.wallet_status_label.config(text="🔴")
 
     def create_llm_tab(self):
-        """Create the LLM responses table tab."""
+        """Create the LLM responses table tab with channel column."""
         llm_frame = ttk.Frame(self.notebook)
         self.notebook.add(llm_frame, text="🤖 LLM Responses")
 
@@ -1063,17 +1086,38 @@ class TradingBotGUI:
 
         ttk.Button(control_frame, text="Refresh", command=self.refresh_llm).pack(side=tk.LEFT, padx=5)
 
+        # Channel filter
+        ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
+        self.llm_channel_filter = ttk.Combobox(control_frame, width=20)
+        self.llm_channel_filter.pack(side=tk.LEFT, padx=5)
+        self.llm_channel_filter.bind('<<ComboboxSelected>>', self.filter_llm_responses)
+
         # LLM responses treeview
         self.llm_tree = ttk.Treeview(llm_frame, show='headings')
         self.llm_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Configure LLM columns
-        llm_columns = ['ID', 'Timestamp', 'Action', 'Pair', 'Confidence', 'Entry Range', 'Stop Loss', 'Take Profit', 'Leverage']
+        # Configure LLM columns - ADD CHANNEL COLUMN
+        llm_columns = ['ID', 'Timestamp', 'Channel', 'Action', 'Pair', 'Confidence', 'Entry Range', 'Stop Loss',
+                       'Take Profit', 'Leverage']
         self.llm_tree['columns'] = llm_columns
+
+        # Set column widths
+        column_widths = {
+            'ID': 50,
+            'Timestamp': 130,
+            'Channel': 120,  # New channel column
+            'Action': 60,
+            'Pair': 80,
+            'Confidence': 80,
+            'Entry Range': 100,
+            'Stop Loss': 80,
+            'Take Profit': 120,
+            'Leverage': 80
+        }
 
         for col in llm_columns:
             self.llm_tree.heading(col, text=col)
-            self.llm_tree.column(col, width=120)
+            self.llm_tree.column(col, width=column_widths.get(col, 100))
 
         # Scrollbar for LLM
         llm_scrollbar = ttk.Scrollbar(llm_frame, orient=tk.VERTICAL, command=self.llm_tree.yview)
@@ -1330,13 +1374,225 @@ class TradingBotGUI:
                 self.llm_tree.insert('', tk.END, values=['', '', f'Error: {e}', '', '', '', '', '', ''])
             if hasattr(self, 'llm_status_label'):
                 self.llm_status_label.config(text="🔴")
-    
+
+    def refresh_llm(self):
+        """Refresh the LLM responses table with channel information."""
+        if not self.db:
+            # Show message in empty table
+            for item in self.llm_tree.get_children():
+                self.llm_tree.delete(item)
+            self.llm_tree.insert('', tk.END, values=['', '', 'No database connection', '', '', '', '', '', '', ''])
+            if hasattr(self, 'llm_status_label'):
+                self.llm_status_label.config(text="🔴")
+            return
+
+        try:
+            # Update status indicator
+            if hasattr(self, 'llm_status_label'):
+                self.llm_status_label.config(text="🟡")
+
+            # Clear existing items
+            for item in self.llm_tree.get_children():
+                self.llm_tree.delete(item)
+
+            # Get LLM responses
+            if hasattr(self.db, 'get_llm_responses'):
+                # Use the new method if available
+                responses = self.db.get_llm_responses()
+            else:
+                # Fallback to direct SQL query
+                if hasattr(self.db, 'cursor'):
+                    try:
+                        self.db.cursor.execute("SELECT * FROM llm_responses ORDER BY timestamp DESC")
+                        columns = [description[0] for description in self.db.cursor.description]
+                        responses = [dict(zip(columns, row)) for row in self.db.cursor.fetchall()]
+                    except Exception as e:
+                        self.llm_tree.insert('', tk.END, values=['', '', '', f'Error: {e}', '', '', '', '', '', ''])
+                        if hasattr(self, 'llm_status_label'):
+                            self.llm_status_label.config(text="🔴")
+                        return
+                else:
+                    # Using full database object
+                    cursor = self.db.cursor
+                    cursor.execute("SELECT * FROM llm_responses ORDER BY timestamp DESC")
+                    columns = [description[0] for description in cursor.description]
+                    responses = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+            # Update channel filter
+            channels = set()
+            for response in responses:
+                if response.get('channel'):
+                    channels.add(response['channel'])
+
+            if hasattr(self, 'llm_channel_filter'):
+                self.llm_channel_filter['values'] = ['All'] + sorted(list(channels))
+                if not self.llm_channel_filter.get():
+                    self.llm_channel_filter.set('All')
+
+            # Populate LLM responses
+            for response in responses:
+                pair = f"{response.get('base_currency', '')}/{response.get('quote_currency', '')}"
+                entry_range = response.get('entry_price_range', '')
+                if entry_range and entry_range != 'null':
+                    try:
+                        import json
+                        entry_range = json.loads(entry_range)
+                        if isinstance(entry_range, list) and len(entry_range) >= 2:
+                            entry_range = f"{entry_range[0]}-{entry_range[1]}"
+                        else:
+                            entry_range = str(entry_range)
+                    except:
+                        entry_range = str(entry_range)
+
+                take_profit = response.get('take_profit_targets', '')
+                if take_profit and take_profit != 'null':
+                    try:
+                        import json
+                        take_profit = json.loads(take_profit)
+                        if isinstance(take_profit, list):
+                            take_profit = ', '.join(map(str, take_profit[:3]))  # Show first 3
+                        else:
+                            take_profit = str(take_profit)
+                    except:
+                        take_profit = str(take_profit)
+
+                # Format timestamp
+                timestamp = response.get('timestamp', '')
+                if timestamp:
+                    try:
+                        from datetime import datetime
+                        if 'T' in timestamp:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                        timestamp = dt.strftime('%m/%d %H:%M:%S')
+                    except:
+                        pass  # Keep original if parsing fails
+
+                values = [
+                    response.get('id', ''),
+                    timestamp,
+                    response.get('channel', 'Unknown'),  # Add channel value
+                    response.get('action', ''),
+                    pair,
+                    response.get('confidence', ''),
+                    entry_range,
+                    response.get('stop_loss', ''),
+                    take_profit,
+                    response.get('leverage', '')
+                ]
+                self.llm_tree.insert('', tk.END, values=values)
+
+            # Update status indicator
+            if hasattr(self, 'llm_status_label'):
+                self.llm_status_label.config(text="🟢")
+
+        except Exception as e:
+            self.llm_tree.insert('', tk.END, values=['', '', '', f'Error: {e}', '', '', '', '', '', ''])
+            if hasattr(self, 'llm_status_label'):
+                self.llm_status_label.config(text="🔴")
+
+    def filter_llm_responses(self, event=None):
+        """Filter LLM responses by selected channel."""
+        if not self.db or not hasattr(self, 'llm_channel_filter'):
+            return
+
+        try:
+            selected_channel = self.llm_channel_filter.get()
+
+            # Clear existing items
+            for item in self.llm_tree.get_children():
+                self.llm_tree.delete(item)
+
+            # Get filtered responses
+            if selected_channel == 'All':
+                if hasattr(self.db, 'get_llm_responses'):
+                    responses = self.db.get_llm_responses()
+                else:
+                    # Fallback to all responses
+                    self.refresh_llm()
+                    return
+            else:
+                if hasattr(self.db, 'get_llm_responses_by_channel'):
+                    responses = self.db.get_llm_responses_by_channel(selected_channel)
+                else:
+                    # Fallback: filter in Python
+                    if hasattr(self.db, 'cursor'):
+                        self.db.cursor.execute("SELECT * FROM llm_responses WHERE channel = ? ORDER BY timestamp DESC",
+                                               (selected_channel,))
+                        columns = [description[0] for description in self.db.cursor.description]
+                        responses = [dict(zip(columns, row)) for row in self.db.cursor.fetchall()]
+                    else:
+                        responses = []
+
+            # Populate filtered responses (same logic as refresh_llm)
+            for response in responses:
+                pair = f"{response.get('base_currency', '')}/{response.get('quote_currency', '')}"
+                entry_range = response.get('entry_price_range', '')
+                if entry_range and entry_range != 'null':
+                    try:
+                        import json
+                        entry_range = json.loads(entry_range)
+                        if isinstance(entry_range, list) and len(entry_range) >= 2:
+                            entry_range = f"{entry_range[0]}-{entry_range[1]}"
+                        else:
+                            entry_range = str(entry_range)
+                    except:
+                        entry_range = str(entry_range)
+
+                take_profit = response.get('take_profit_targets', '')
+                if take_profit and take_profit != 'null':
+                    try:
+                        import json
+                        take_profit = json.loads(take_profit)
+                        if isinstance(take_profit, list):
+                            take_profit = ', '.join(map(str, take_profit[:3]))
+                        else:
+                            take_profit = str(take_profit)
+                    except:
+                        take_profit = str(take_profit)
+
+                # Format timestamp
+                timestamp = response.get('timestamp', '')
+                if timestamp:
+                    try:
+                        from datetime import datetime
+                        if 'T' in timestamp:
+                            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        else:
+                            dt = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                        timestamp = dt.strftime('%m/%d %H:%M:%S')
+                    except:
+                        pass
+
+                values = [
+                    response.get('id', ''),
+                    timestamp,
+                    response.get('channel', 'Unknown'),
+                    response.get('action', ''),
+                    pair,
+                    response.get('confidence', ''),
+                    entry_range,
+                    response.get('stop_loss', ''),
+                    take_profit,
+                    response.get('leverage', '')
+                ]
+                self.llm_tree.insert('', tk.END, values=values)
+
+            self.status_bar.config(text=f"Filtered LLM responses: {len(responses)} records")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to filter LLM responses: {e}")
+            print(f"Error filtering LLM responses: {e}")
+            import traceback
+            traceback.print_exc()
+
     def update_gui(self):
         """Update GUI elements from queue."""
         try:
             while True:
                 msg_data = self.gui_queue.get_nowait()
-                
+
                 # Handle different message formats
                 if len(msg_data) == 2:
                     msg_type, content = msg_data
@@ -1345,7 +1601,7 @@ class TradingBotGUI:
                     msg_type, content, level = msg_data
                 else:
                     continue
-                
+
                 if msg_type == 'log':
                     self.add_log_message(content, level)
                 elif msg_type == 'status':
@@ -1357,18 +1613,18 @@ class TradingBotGUI:
                     self.add_log_message(f"ERROR: {content}", "ERROR")
                     if hasattr(self, 'bot_status_label'):
                         self.bot_status_label.config(foreground="red")
-                        
+
         except queue.Empty:
             pass
-        
+
         # Schedule next update
         self.root.after(100, self.update_gui)
-    
+
     def add_log_message(self, message, level="INFO"):
         """Add a log message to the display with color coding."""
         if not self.show_live_var.get():
             return
-        
+
         # Don't add timestamp if message already has one (from logging formatter)
         if message.strip().startswith("20") and " INFO " in message or " ERROR " in message or " WARNING " in message:
             # Message is already formatted by logging, use as-is
@@ -1384,35 +1640,35 @@ class TradingBotGUI:
             # Add timestamp for non-logging messages
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             formatted_message = f"{timestamp} {message.strip()}\n"
-        
+
         # Determine display properties based on level
         if level == "ERROR" or "ERROR" in formatted_message:
             tag = "ERROR"
         elif level == "WARNING" or "WARNING" in formatted_message:
-            tag = "WARNING" 
+            tag = "WARNING"
         elif level == "SUCCESS" or "✅" in formatted_message:
             tag = "SUCCESS"
         elif level == "INFO" or "INFO" in formatted_message:
             tag = "INFO"
         else:
             tag = "INFO"
-        
+
         # Insert with color coding
         self.log_text.insert(tk.END, formatted_message, tag)
-        
+
         # Auto-scroll if enabled
         if self.auto_scroll_var.get():
             self.log_text.see(tk.END)
-        
+
         # Limit log size (keep last 1000 lines)
         lines = int(self.log_text.index('end-1c').split('.')[0])
         if lines > 1000:
             self.log_text.delete('1.0', f'{lines-1000}.0')
-        
+
         # Update log status indicator
         if hasattr(self, 'log_status_label'):
             self.log_status_label.config(text="🟢")
-    
+
     def auto_refresh(self):
         """Auto-refresh data continuously for live updates."""
         try:
@@ -1423,15 +1679,15 @@ class TradingBotGUI:
                     self.refresh_wallet()
                     self.loaded_wallet_tab = True
                 self.refresh_llm()
-            
+
             # Update status bar with current time
             current_time = datetime.now().strftime("%H:%M:%S")
             connection_status = "🟢 LIVE" if self.bot_running else ("🟡 MONITORING" if self.db else "🔴 NO DATA")
             self.status_bar.config(text=f"Last refresh: {current_time} | Status: {connection_status}")
-            
+
         except Exception as e:
             print(f"Auto-refresh error: {e}")
-        
+
         # Schedule next auto-refresh (2 seconds for live updates)
         self.root.after(self.auto_refresh_interval, self.auto_refresh)
 
@@ -1440,7 +1696,7 @@ def main(integrated_bot=False):
     """Main function to start the GUI."""
     root = tk.Tk()
     app = TradingBotGUI(root, run_bot=integrated_bot)
-    
+
     def on_closing():
         """Handle window closing."""
         if hasattr(app, 'db') and app.db:
@@ -1449,9 +1705,9 @@ def main(integrated_bot=False):
             except:
                 pass
         root.destroy()
-    
+
     root.protocol("WM_DELETE_WINDOW", on_closing)
-    
+
     try:
         root.mainloop()
     except KeyboardInterrupt:
@@ -1462,15 +1718,15 @@ def main(integrated_bot=False):
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description='Trading Bot GUI')
-    parser.add_argument('--with-bot', action='store_true', 
+    parser.add_argument('--with-bot', action='store_true',
                        help='Run the trading bot integrated with the GUI')
     parser.add_argument('--monitor-only', action='store_true',
                        help='Only monitor existing bot (default)')
-    
+
     args = parser.parse_args()
-    
+
     if args.with_bot:
         print("🤖 Starting GUI with integrated trading bot...")
         main(integrated_bot=True)

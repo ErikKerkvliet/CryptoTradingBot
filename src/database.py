@@ -41,19 +41,21 @@ class TradingDatabase:
             )
         """)
         self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS llm_responses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action TEXT,
-                base_currency TEXT,
-                quote_currency TEXT,
-                confidence INTEGER,
-                entry_price_range TEXT,
-                leverage TEXT,
-                stop_loss REAL,
-                take_profit_targets TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS llm_responses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel TEXT,
+                    action TEXT,
+                    base_currency TEXT,
+                    quote_currency TEXT,
+                    confidence INTEGER,
+                    entry_price_range TEXT,
+                    leverage TEXT,
+                    stop_loss REAL,
+                    take_profit_targets TEXT,
+                    take_profit_target INTEGER,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
         self.conn.commit()
 
     def sync_wallet(self, balances: Dict[str, float]):
@@ -179,13 +181,14 @@ class TradingDatabase:
         columns = [description[0] for description in self.cursor.description]
         return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 
-    def add_llm_response(self, response_data: Dict[str, Any]):
-        """Adds a new LLM response to the database."""
+    def add_llm_response(self, response_data: Dict[str, Any], channel: str = None):
+        """Adds a new LLM response to the database with channel information."""
         self.cursor.execute("""
-            INSERT INTO llm_responses (action, base_currency, quote_currency, confidence, 
+            INSERT INTO llm_responses (channel, action, base_currency, quote_currency, confidence, 
                                      entry_price_range, leverage, stop_loss, take_profit_targets)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
+            channel,  # Add channel as first parameter
             response_data.get('action'),
             response_data.get('base_currency'),
             response_data.get('quote_currency'),
@@ -220,21 +223,55 @@ class TradingDatabase:
 
         return response
 
-    def get_llm_response(self, response_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def get_llm_responses_by_channel(self, channel: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
-        Retrieve a specific LLM response, or the latest one.
+        Retrieves LLM responses from a specific channel.
+
+        Args:
+            channel: The name/ID of the channel
+            limit: Optional limit on number of responses to return
+
+        Returns:
+            List of LLM response dictionaries
         """
-        if response_id is None:
-            self.cursor.execute("SELECT * FROM llm_responses ORDER BY id DESC LIMIT 1")
-        else:
-            self.cursor.execute("SELECT * FROM llm_responses WHERE id = ?", (response_id,))
+        query = """
+            SELECT * FROM llm_responses 
+            WHERE channel = ? 
+            ORDER BY timestamp DESC
+        """
+        params = [channel]
 
-        row = self.cursor.fetchone()
-        if not row:
-            return None
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
 
+        self.cursor.execute(query, params)
         columns = [description[0] for description in self.cursor.description]
-        return self._transform_llm_response(row, columns)
+
+        results = []
+        for row in self.cursor.fetchall():
+            result = self._transform_llm_response(row, columns)
+            if result:
+                results.append(result)
+
+        return results
+
+    def get_llm_responses(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Retrieve all LLM responses from the database."""
+        query = "SELECT * FROM llm_responses ORDER BY timestamp DESC"
+        if limit:
+            query += f" LIMIT {limit}"
+
+        self.cursor.execute(query)
+        columns = [description[0] for description in self.cursor.description]
+
+        results = []
+        for row in self.cursor.fetchall():
+            result = self._transform_llm_response(row, columns)
+            if result:
+                results.append(result)
+
+        return results
 
     def get_trades(self) -> List[Dict[str, Any]]:
         """Retrieve all trades from the database."""
