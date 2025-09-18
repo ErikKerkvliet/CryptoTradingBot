@@ -79,7 +79,7 @@ class LogCapture:
             self.log_file = None
 
     def write(self, message):
-        if message.strip():  # Don't send empty lines
+        if message:  # Don't send empty strings, but allow strings with only whitespace (like '\n')
             # Send to GUI (without level since this is stdout/stderr)
             self.gui_queue.put(('log', message))
 
@@ -1089,39 +1089,28 @@ class TradingBotGUI:
         self.root.after(100, self.update_gui)
 
     def add_log_message(self, message, level="INFO"):
-        """Add a log message to the display with color coding."""
+        """Add a log message to the display with color coding, preserving original formatting."""
         if not self.show_live_var.get():
             return
 
-        # Don't add timestamp if message already has one (from logging formatter)
-        if message.strip().startswith("20") and " INFO " in message or " ERROR " in message or " WARNING " in message:
-            # Message is already formatted by logging, use as-is
-            formatted_message = message
-            # Extract level from formatted message
-            if " ERROR " in message:
-                level = "ERROR"
-            elif " WARNING " in message:
-                level = "WARNING"
-            elif " INFO " in message:
-                level = "INFO"
-        else:
-            # Add timestamp for non-logging messages
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            formatted_message = f"{timestamp} {message.strip()}\n"
+        # The logging handler provides a full formatted message.
+        # The stdout capture provides raw output which we want to preserve, including newlines.
+        formatted_message = message
 
-        # Determine display properties based on level
-        if level == "ERROR" or "ERROR" in formatted_message:
+        # Determine display properties based on level or keywords in the message.
+        # The order matters: check for more specific (ERROR) before less specific (INFO).
+        if level == "ERROR" or "ERROR" in message or "❌" in message:
             tag = "ERROR"
-        elif level == "WARNING" or "WARNING" in formatted_message:
+        elif level == "WARNING" or "WARNING" in message or "⚠️" in message:
             tag = "WARNING"
-        elif level == "SUCCESS" or "✅" in formatted_message:
+        elif level == "SUCCESS" or "✅" in message:
             tag = "SUCCESS"
-        elif level == "INFO" or "INFO" in formatted_message:
+        elif level == "INFO" or "INFO" in message:
             tag = "INFO"
         else:
-            tag = "INFO"
+            tag = "INFO"  # Default for plain print statements
 
-        # Insert with color coding
+        # Insert with color coding. The message should already contain a newline.
         self.log_text.insert(tk.END, formatted_message, tag)
 
         # Auto-scroll if enabled
@@ -1131,7 +1120,7 @@ class TradingBotGUI:
         # Limit log size (keep last 1000 lines)
         lines = int(self.log_text.index('end-1c').split('.')[0])
         if lines > 1000:
-            self.log_text.delete('1.0', f'{lines-1000}.0')
+            self.log_text.delete('1.0', f'{lines - 1000}.0')
 
         # Update log status indicator
         if hasattr(self, 'log_status_label'):

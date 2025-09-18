@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Dict, Any, List
 import threading
+from collections import defaultdict
 
 
 class EnhancedWalletTab:
@@ -32,7 +33,7 @@ class EnhancedWalletTab:
 
         # Channel filter
         ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
-        self.channel_filter = ttk.Combobox(control_frame, width=20)
+        self.channel_filter = ttk.Combobox(control_frame, width=20, values=['All', 'Global (Summary)'])
         self.channel_filter.pack(side=tk.LEFT, padx=5)
         self.channel_filter.bind('<<ComboboxSelected>>', self.filter_wallet)
 
@@ -152,28 +153,31 @@ class EnhancedWalletTab:
             wallet_data = self._filter_template_data(wallet_data)
 
             # Update channel filter
-            channels = set(['All'])
+            channels = {'All', 'Global (Summary)'}
             for item in wallet_data:
                 channel_name = item.get('channel', 'global')
                 # Skip template channels in filter
-                if not self._is_template_channel(channel_name):
+                if not self._is_template_channel(channel_name) and channel_name != 'global':
                     channels.add(channel_name)
 
             self.channel_filter['values'] = sorted(list(channels))
             if not self.channel_filter.get():
                 self.channel_filter.set('All')
 
-            # Populate wallet table
+            # Populate wallet table (defaulting to 'All' view)
             total_usd_value = 0
             displayed_count = 0
             for item in wallet_data:
+                # Skip the old 'global' entries if they exist
+                if item.get('channel') == 'global':
+                    continue
+
                 if item['balance'] > 0:  # Only show non-zero balances
-                    channel = item.get('channel', 'global')
+                    channel = item.get('channel')
                     currency = item['currency']
                     balance = item['balance']
 
-                    # Skip if this looks like template data
-                    if self._is_template_channel(channel):
+                    if not channel or self._is_template_channel(channel):
                         continue
 
                     # Calculate basic USD estimate (simplified)
@@ -195,7 +199,6 @@ class EnhancedWalletTab:
                     displayed_count += 1
 
             if displayed_count == 0:
-                # Show message if no real data found
                 self.wallet_tree.insert('', tk.END, values=[
                     'No wallet data', 'Configure channels', 'in your .env file', '', '', ''
                 ])
@@ -246,18 +249,23 @@ class EnhancedWalletTab:
         """Refresh wallet while preserving current filter."""
         current_filter = self.channel_filter.get() if hasattr(self, 'channel_filter') else 'All'
         self.refresh_wallet()
-        if current_filter and current_filter != 'All':
+        if current_filter:
             self.channel_filter.set(current_filter)
             self.filter_wallet()
 
     def filter_wallet(self, event=None):
-        """Filter wallet by selected channel."""
+        """Filter wallet by selected channel, with special handling for Global Summary."""
         if not self.db:
             return
 
-        try:
-            selected_channel = self.channel_filter.get()
+        selected_channel = self.channel_filter.get()
 
+        # Handle Global Summary view
+        if selected_channel == 'Global (Summary)':
+            self._populate_global_summary()
+            return
+
+        try:
             # Clear existing items
             for item in self.wallet_tree.get_children():
                 self.wallet_tree.delete(item)
@@ -268,36 +276,29 @@ class EnhancedWalletTab:
             else:
                 all_wallet_data = self._get_wallet_data_fallback()
 
-            # Filter out template data first
             all_wallet_data = self._filter_template_data(all_wallet_data)
 
-            # Then filter by channel
+            # Filter by channel
             if selected_channel == 'All':
-                filtered_data = all_wallet_data
+                filtered_data = [d for d in all_wallet_data if d.get('channel') != 'global']
             else:
                 filtered_data = [item for item in all_wallet_data
-                               if item.get('channel', 'global') == selected_channel]
+                               if item.get('channel') == selected_channel]
 
             # Populate filtered data
             total_usd_value = 0
             for item in filtered_data:
                 if item['balance'] > 0:
-                    channel = item.get('channel', 'global')
+                    channel = item.get('channel')
                     currency = item['currency']
                     balance = item['balance']
-
                     usd_value = self._estimate_usd_value(currency, balance)
                     total_usd_value += usd_value
-
                     pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
 
                     values = [
-                        channel,
-                        currency,
-                        f"{balance:.8f}",
-                        f"${usd_value:.2f}",
-                        "Est.",
-                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                        channel, currency, f"{balance:.8f}", f"${usd_value:.2f}",
+                        "Est.", f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
                     ]
                     self.wallet_tree.insert('', tk.END, values=values)
 
@@ -307,12 +308,69 @@ class EnhancedWalletTab:
                 ])
 
             self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Filtered)")
-
             if self.status_callback:
                 self.status_callback(f"Filtered wallet: {len(filtered_data)} records for {selected_channel}")
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to filter wallet: {e}")
+
+    def _populate_global_summary(self, crypto_prices=None):
+        """Calculate and display the aggregated global summary."""
+        try:
+            # Clear existing items
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            all_wallet_data = self.db.get_all_channel_balances()
+            configs = self.db.get_channel_configs()
+
+            # Aggregate balances from all channels
+            global_balances = defaultdict(float)
+            for item in all_wallet_data:
+                if item.get('channel') != 'global':
+                    global_balances[item['currency']] += item['balance']
+
+            # Calculate total starting value (assuming all start in USDT for simplicity)
+            total_start_value = sum(c.get('start_amount', 0) for c in configs if c.get('start_currency') == 'USDT')
+
+            # Calculate total current value
+            total_current_value = 0
+            for currency, balance in global_balances.items():
+                if crypto_prices:
+                    price = self._get_real_usd_price(currency, crypto_prices)
+                    total_current_value += balance * price
+                else:
+                    total_current_value += self._estimate_usd_value(currency, balance)
+
+            # Calculate global P&L
+            global_pnl_pct = 0
+            if total_start_value > 0:
+                pnl = total_current_value - total_start_value
+                global_pnl_pct = (pnl / total_start_value) * 100
+
+            # Populate tree with aggregated data
+            for currency, balance in sorted(global_balances.items()):
+                if balance > 0:
+                    if crypto_prices:
+                        price = self._get_real_usd_price(currency, crypto_prices)
+                        usd_value = balance * price
+                        price_str = f"${price:.2f}" if price > 0 else "N/A"
+                    else:
+                        usd_value = self._estimate_usd_value(currency, balance)
+                        price_str = "Est."
+
+                    values = [
+                        "Global (Summary)", currency, f"{balance:.8f}", f"${usd_value:.2f}",
+                        price_str, f"{global_pnl_pct:+.1f}%"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+
+            self.total_value_label.config(text=f"Total Value: ${total_current_value:.2f} (Global)")
+            if self.status_callback:
+                self.status_callback("Displayed global wallet summary")
+
+        except Exception as e:
+            self._show_error_in_tree(f'Global Summary Error: {e}')
 
     def show_add_channel_dialog(self):
         """Show dialog to add a new channel with starting balance."""
@@ -525,9 +583,11 @@ class EnhancedWalletTab:
         ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
 
     def refresh_wallet_with_real_prices(self):
-        """Refresh wallet with real USD prices (same as before but enhanced for channels)."""
+        """Refresh wallet with real USD prices while preserving the current filter."""
+        # Get the current filter before starting the background thread
+        current_filter = self.channel_filter.get()
 
-        def run_refresh():
+        def run_refresh(channel_filter_to_apply):
             try:
                 # Use thread-safe GUI updates
                 self.parent_frame.after(0, lambda: self.usd_refresh_button.config(state='disabled', text="🔄 Loading..."))
@@ -597,16 +657,18 @@ class EnhancedWalletTab:
                 if currencies_to_fetch:
                     crypto_prices = self._fetch_crypto_prices_sync(list(currencies_to_fetch))
 
-                # Update display
+                # Update display, passing the filter that was active when the button was clicked
                 self.parent_frame.after(0, lambda: self._update_wallet_display_with_real_prices(wallet_data,
-                                                                                                crypto_prices))
+                                                                                                crypto_prices,
+                                                                                                channel_filter_to_apply))
 
             except Exception as e:
                 self.usd_status_label.config(text=f"Error: {str(e)[:50]}...", foreground="red")
             finally:
                 self.parent_frame.after(0, lambda: self.usd_refresh_button.config(state='normal', text="💲 Refresh USD"))
 
-        threading.Thread(target=run_refresh, daemon=True).start()
+        # Start the thread and pass the current filter value to it
+        threading.Thread(target=run_refresh, args=(current_filter,), daemon=True).start()
 
     def _get_wallet_data_fallback(self):
         """Fallback method for simple database connections."""
@@ -703,53 +765,63 @@ class EnhancedWalletTab:
             print(f"Error fetching prices: {e}")
             return {}
 
-    def _update_wallet_display_with_real_prices(self, wallet_data, crypto_prices):
-        """Update the wallet display with real prices."""
+    def _get_real_usd_price(self, currency, crypto_prices):
+        """Helper to get real USD price from a dictionary, with fallbacks."""
+        if currency in ['USDT', 'USDC', 'USD', 'BUSD', 'DAI']:
+            return 1.0
+        elif currency == 'EUR':
+            return 1.1
+        elif currency == 'GBP':
+            return 1.25
+        else:
+            return crypto_prices.get(currency, 0)
+
+    def _update_wallet_display_with_real_prices(self, wallet_data, crypto_prices, channel_filter):
+        """Update the wallet display with real prices and apply the specified filter."""
         try:
-            # Clear and repopulate with real prices
+            # Clear the tree before repopulating
             for item in self.wallet_tree.get_children():
                 self.wallet_tree.delete(item)
 
-            total_usd_value = 0
             updated_count = len([p for p in crypto_prices.values() if p > 0])
 
-            for item in wallet_data:
-                if item['balance'] > 0:
-                    channel = item.get('channel', 'global')
-                    currency = item['currency']
-                    balance = item['balance']
+            # Handle Global Summary or other filters
+            if channel_filter == 'Global (Summary)':
+                self._populate_global_summary(crypto_prices=crypto_prices)
+            else:
+                # Filter data for 'All' or a specific channel
+                if channel_filter and channel_filter != 'All':
+                    filtered_data = [item for item in wallet_data if item.get('channel', 'global') == channel_filter]
+                else:
+                    # 'All' view should not include 'global' entries from the DB
+                    filtered_data = [d for d in wallet_data if d.get('channel') != 'global']
 
-                    # Get real USD price
-                    if currency in ['USDT', 'USDC', 'USD', 'BUSD', 'DAI']:
-                        usd_price = 1.0
-                        usd_value = balance
-                    elif currency == 'EUR':
-                        usd_price = 1.1
+                total_usd_value = 0
+                # Iterate over the FILTERED data to populate the tree
+                for item in filtered_data:
+                    if item['balance'] > 0:
+                        channel = item.get('channel')
+                        currency = item['currency']
+                        balance = item['balance']
+                        usd_price = self._get_real_usd_price(currency, crypto_prices)
                         usd_value = balance * usd_price
-                    elif currency == 'GBP':
-                        usd_price = 1.25
-                        usd_value = balance * usd_price
-                    else:
-                        usd_price = crypto_prices.get(currency, 0)
-                        usd_value = balance * usd_price
+                        total_usd_value += usd_value
+                        pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
 
-                    total_usd_value += usd_value
+                        values = [
+                            channel, currency, f"{balance:.8f}", f"${usd_value:.2f}",
+                            f"${usd_price:.2f}" if usd_price > 0 else "N/A",
+                            f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                        ]
+                        self.wallet_tree.insert('', tk.END, values=values)
 
-                    # Calculate P&L
-                    pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
+                # Update total value label, noting if it's filtered
+                label_text = f"Total Value: ${total_usd_value:.2f}"
+                if channel_filter and channel_filter != 'All':
+                    label_text += " (Filtered)"
+                self.total_value_label.config(text=label_text)
 
-                    values = [
-                        channel,
-                        currency,
-                        f"{balance:.8f}",
-                        f"${usd_value:.2f}",
-                        f"${usd_price:.2f}" if usd_price > 0 else "N/A",
-                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
-                    ]
-                    self.wallet_tree.insert('', tk.END, values=values)
-
-            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f}")
-
+            # This block will now run for ALL successful filters
             status_text = f"✅ Updated {updated_count} prices from CoinGecko"
             self.usd_status_label.config(text=status_text, foreground="green")
 
@@ -766,4 +838,6 @@ class EnhancedWalletTab:
 
     def _show_error_in_tree(self, error_msg):
         """Show error message in the tree."""
+        for item in self.wallet_tree.get_children():
+            self.wallet_tree.delete(item)
         self.wallet_tree.insert('', tk.END, values=[error_msg, '', '', '', '', ''])

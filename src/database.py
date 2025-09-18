@@ -194,8 +194,6 @@ class TradingDatabase:
         """)
         return {row[0]: row[1] for row in self.cursor.fetchall()}
 
-    # ... (keep all existing methods unchanged: add_trade, get_last_buy_trade, etc.)
-
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
         self.cursor.execute("""

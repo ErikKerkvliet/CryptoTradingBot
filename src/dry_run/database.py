@@ -85,6 +85,7 @@ class DryRunDatabase:
         print("Resetting dry-run database for a new session...")
         self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
+        self.cursor.execute("DELETE FROM llm_responses")
         # Don't delete channel_configs and llm_responses on reset
         self.conn.commit()
 
