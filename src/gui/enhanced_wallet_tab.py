@@ -28,7 +28,7 @@ class EnhancedWalletTab:
         self.wallet_status_label.pack(side=tk.LEFT, padx=2)
 
         # Refresh button
-        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet_with_filter).pack(side=tk.LEFT, padx=5)
 
         # Channel filter
         ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
@@ -241,6 +241,14 @@ class EnhancedWalletTab:
 
         channel_lower = str(channel_name).lower()
         return any(pattern in channel_lower for pattern in template_patterns)
+
+    def refresh_wallet_with_filter(self):
+        """Refresh wallet while preserving current filter."""
+        current_filter = self.channel_filter.get() if hasattr(self, 'channel_filter') else 'All'
+        self.refresh_wallet()
+        if current_filter and current_filter != 'All':
+            self.channel_filter.set(current_filter)
+            self.filter_wallet()
 
     def filter_wallet(self, event=None):
         """Filter wallet by selected channel."""
@@ -518,16 +526,60 @@ class EnhancedWalletTab:
 
     def refresh_wallet_with_real_prices(self):
         """Refresh wallet with real USD prices (same as before but enhanced for channels)."""
+
         def run_refresh():
             try:
-                self.usd_refresh_button.config(state='disabled', text="🔄 Loading...")
-                self.usd_status_label.config(text="Fetching prices...", foreground="orange")
-
+                # Use thread-safe GUI updates
+                self.parent_frame.after(0, lambda: self.usd_refresh_button.config(state='disabled', text="🔄 Loading..."))
+                self.parent_frame.after(0, lambda: self.usd_status_label.config(text="Fetching prices...",
+                                                                                foreground="orange"))
                 # Get all wallet data
-                if hasattr(self.db, 'get_all_channel_balances'):
-                    wallet_data = self.db.get_all_channel_balances()
-                else:
-                    wallet_data = self._get_wallet_data_fallback()
+                wallet_data = []
+                try:
+                    import sqlite3
+                    from config.settings import BASE_DIR
+
+                    # Determine database path
+                    if hasattr(self.db, '__class__') and 'DryRun' in self.db.__class__.__name__:
+                        db_path = BASE_DIR / "dry_run.db"
+                    else:
+                        db_path = BASE_DIR / "live_trading.db"
+
+                    # Create thread-local database connection
+                    if db_path.exists():
+                        conn = sqlite3.connect(str(db_path))
+                        cursor = conn.cursor()
+
+                        # Get wallet data with thread-safe connection
+                        cursor.execute("""
+                            SELECT currency, balance, telegram_channel, 
+                                   cc.start_amount, cc.start_currency
+                            FROM wallet w
+                            LEFT JOIN channel_configs cc ON w.telegram_channel = cc.channel_name
+                            ORDER BY w.telegram_channel, w.currency
+                        """)
+
+                        for row in cursor.fetchall():
+                            wallet_data.append({
+                                'currency': row[0],
+                                'balance': row[1],
+                                'channel': row[2] or 'global',
+                                'start_amount': row[3],
+                                'start_currency': row[4]
+                            })
+
+                        conn.close()
+                    else:
+                        # Fallback: schedule UI update with error message
+                        self.parent_frame.after(0, lambda: self.usd_status_label.config(text="Database not found",
+                                                                                        foreground="red"))
+                        return
+
+                except Exception as db_error:
+                    # Schedule UI update with error message
+                    error_msg = f"Database error: {str(db_error)}"
+                    self.parent_frame.after(0, lambda: self.usd_status_label.config(text=error_msg, foreground="red"))
+                    return
 
                 # Filter out template data
                 wallet_data = self._filter_template_data(wallet_data)
@@ -546,12 +598,13 @@ class EnhancedWalletTab:
                     crypto_prices = self._fetch_crypto_prices_sync(list(currencies_to_fetch))
 
                 # Update display
-                self._update_wallet_display_with_real_prices(wallet_data, crypto_prices)
+                self.parent_frame.after(0, lambda: self._update_wallet_display_with_real_prices(wallet_data,
+                                                                                                crypto_prices))
 
             except Exception as e:
                 self.usd_status_label.config(text=f"Error: {str(e)[:50]}...", foreground="red")
             finally:
-                self.usd_refresh_button.config(state='normal', text="💲 Refresh USD")
+                self.parent_frame.after(0, lambda: self.usd_refresh_button.config(state='normal', text="💲 Refresh USD"))
 
         threading.Thread(target=run_refresh, daemon=True).start()
 

@@ -130,7 +130,11 @@ class TradingBotGUI:
         self.settings_loaded = SETTINGS_LOADED
         self.bot_process = None
         self.bot_running = False
-        self.loaded_wallet_tab = False
+
+        # Initialize wallet-related attributes
+        self.wallet_tree = None
+        self.enhanced_wallet = None
+        self.using_enhanced_wallet = False
 
         if not self.settings_loaded:
             # Try to create a minimal database connection for read-only access
@@ -219,7 +223,6 @@ class TradingBotGUI:
         try:
             # First check if log file was created (if it didn't exist before)
             if not self.current_log_file:
-                # --- MODIFICATION START ---
                 log_file_path = os.path.join(project_root, "trading_bot.log")
                 if os.path.exists(log_file_path):
                     self.current_log_file = log_file_path
@@ -227,7 +230,6 @@ class TradingBotGUI:
                     print(f"📁 Found new log file: {log_file_path}")
                     if hasattr(self, 'log_status_label'):
                         self.log_status_label.config(text="🟢")
-                # --- MODIFICATION END ---
 
             if self.current_log_file and os.path.exists(self.current_log_file):
                 current_size = os.path.getsize(self.current_log_file)
@@ -544,11 +546,11 @@ class TradingBotGUI:
         trades_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def create_wallet_tab(self):
-        """Create the enhanced wallet table tab with channel support."""
+        """Create the wallet table tab with enhanced or fallback mode."""
         wallet_frame = ttk.Frame(self.notebook)
         self.notebook.add(wallet_frame, text="💰 Wallet")
 
-        # Import and use the enhanced wallet tab
+        # Try to use the enhanced wallet tab
         try:
             from src.gui.enhanced_wallet_tab import EnhancedWalletTab
             self.enhanced_wallet = EnhancedWalletTab(
@@ -556,13 +558,16 @@ class TradingBotGUI:
                 self.db,
                 status_callback=lambda msg: self.status_bar.config(text=msg)
             )
+            self.using_enhanced_wallet = True
+            print("✅ Using enhanced wallet tab")
 
-        except ImportError:
-            # Fallback to basic wallet tab if enhanced version not available
-            self.create_basic_wallet_tab(wallet_frame)
+        except ImportError as e:
+            print(f"⚠️  Enhanced wallet tab not available ({e}), using fallback")
+            self.using_enhanced_wallet = False
+            self._create_fallback_wallet_tab(wallet_frame)
 
-    def create_basic_wallet_tab(self, wallet_frame):
-        """Fallback basic wallet tab with channel column."""
+    def _create_fallback_wallet_tab(self, wallet_frame):
+        """Create a fallback wallet tab when enhanced version fails."""
         # Control buttons
         control_frame = ttk.Frame(wallet_frame)
         control_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -571,34 +576,22 @@ class TradingBotGUI:
         self.wallet_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
         self.wallet_status_label.pack(side=tk.LEFT, padx=2)
 
-        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet_with_channels).pack(side=tk.LEFT, padx=5)
-
-        # Channel filter
-        ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
-        self.wallet_channel_filter = ttk.Combobox(control_frame, width=20)
-        self.wallet_channel_filter.pack(side=tk.LEFT, padx=5)
-        self.wallet_channel_filter.bind('<<ComboboxSelected>>', self.filter_wallet_by_channel)
+        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet).pack(side=tk.LEFT, padx=5)
 
         # Total value label
         self.total_value_label = ttk.Label(control_frame, text="Total Value: Calculating...",
                                            font=('Arial', 10, 'bold'))
         self.total_value_label.pack(side=tk.RIGHT, padx=5)
 
-        # Wallet treeview with channel column
+        # Wallet treeview
         self.wallet_tree = ttk.Treeview(wallet_frame, show='headings')
         self.wallet_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Configure wallet columns with channel
-        wallet_columns = ['Channel', 'Currency', 'Balance', 'USD Value (Est.)', 'P&L %']
+        # Configure wallet columns
+        wallet_columns = ['Currency', 'Balance', 'USD Value (Est.)', 'USD Price']
         self.wallet_tree['columns'] = wallet_columns
 
-        column_widths = {
-            'Channel': 150,
-            'Currency': 100,
-            'Balance': 150,
-            'USD Value (Est.)': 120,
-            'P&L %': 100
-        }
+        column_widths = {'Currency': 100, 'Balance': 150, 'USD Value (Est.)': 120, 'USD Price': 80}
 
         for col in wallet_columns:
             self.wallet_tree.heading(col, text=col)
@@ -608,687 +601,6 @@ class TradingBotGUI:
         wallet_scrollbar = ttk.Scrollbar(wallet_frame, orient=tk.VERTICAL, command=self.wallet_tree.yview)
         self.wallet_tree.configure(yscrollcommand=wallet_scrollbar.set)
         wallet_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-    def refresh_wallet_with_channels(self):
-        """Enhanced wallet refresh with channel support."""
-        if not self.db:
-            self._show_wallet_error("No database connection")
-            return
-
-        try:
-            self.wallet_status_label.config(text="🟡")
-
-            # Clear existing items
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-
-            # Get wallet data with channel information
-            if hasattr(self.db, 'get_all_channel_balances'):
-                wallet_data = self.db.get_all_channel_balances()
-            else:
-                # Fallback for basic database
-                wallet_data = self._get_basic_wallet_data()
-
-            # Update channel filter
-            channels = set(['All'])
-            for item in wallet_data:
-                channels.add(item.get('channel', 'global'))
-
-            self.wallet_channel_filter['values'] = sorted(list(channels))
-            if not self.wallet_channel_filter.get():
-                self.wallet_channel_filter.set('All')
-
-            # Populate wallet
-            total_usd_value = 0
-            for item in wallet_data:
-                if item['balance'] > 0:
-                    channel = item.get('channel', 'global')
-                    currency = item['currency']
-                    balance = item['balance']
-
-                    # Estimate USD value
-                    usd_value = self._estimate_usd_value(currency, balance)
-                    total_usd_value += usd_value
-
-                    # Calculate P&L percentage
-                    pnl_pct = self._calculate_channel_pnl(item, currency, balance)
-
-                    values = [
-                        channel,
-                        currency,
-                        f"{balance:.8f}",
-                        f"${usd_value:.2f}",
-                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
-                    ]
-                    self.wallet_tree.insert('', tk.END, values=values)
-
-            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
-            self.wallet_status_label.config(text="🟢")
-
-        except Exception as e:
-            self._show_wallet_error(f'Error: {e}')
-
-    def filter_wallet_by_channel(self, event=None):
-        """Filter wallet by selected channel."""
-        if not self.db:
-            return
-
-        try:
-            selected_channel = self.wallet_channel_filter.get()
-
-            # Clear existing items
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-
-            # Get and filter wallet data
-            if hasattr(self.db, 'get_all_channel_balances'):
-                all_wallet_data = self.db.get_all_channel_balances()
-            else:
-                all_wallet_data = self._get_basic_wallet_data()
-
-            if selected_channel == 'All':
-                filtered_data = all_wallet_data
-            else:
-                filtered_data = [item for item in all_wallet_data
-                                 if item.get('channel', 'global') == selected_channel]
-
-            # Populate filtered data
-            for item in filtered_data:
-                if item['balance'] > 0:
-                    channel = item.get('channel', 'global')
-                    currency = item['currency']
-                    balance = item['balance']
-
-                    usd_value = self._estimate_usd_value(currency, balance)
-                    pnl_pct = self._calculate_channel_pnl(item, currency, balance)
-
-                    values = [
-                        channel,
-                        currency,
-                        f"{balance:.8f}",
-                        f"${usd_value:.2f}",
-                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
-                    ]
-                    self.wallet_tree.insert('', tk.END, values=values)
-
-            self.status_bar.config(text=f"Filtered wallet: {len(filtered_data)} records for {selected_channel}")
-
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to filter wallet: {e}")
-
-    def _get_basic_wallet_data(self):
-        """Get wallet data from basic database structure."""
-        try:
-            # Try to get channel-specific data first
-            self.db.cursor.execute("""
-                SELECT currency, balance, telegram_channel 
-                FROM wallet 
-                ORDER BY telegram_channel, currency
-            """)
-
-            wallet_data = []
-            for row in self.db.cursor.fetchall():
-                wallet_data.append({
-                    'currency': row[0],
-                    'balance': row[1],
-                    'channel': row[2] or 'global',
-                    'start_amount': None,
-                    'start_currency': None
-                })
-            return wallet_data
-        except:
-            # Ultimate fallback
-            balances = self.db.get_balance() if hasattr(self.db, 'get_balance') else {}
-            return [{
-                'currency': curr,
-                'balance': bal,
-                'channel': 'global',
-                'start_amount': None,
-                'start_currency': None
-            } for curr, bal in balances.items()]
-
-    def _estimate_usd_value(self, currency, balance):
-        """Simple USD value estimation."""
-        if currency in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI']:
-            return balance
-        elif currency == 'EUR':
-            return balance * 1.1
-        elif currency == 'GBP':
-            return balance * 1.25
-        else:
-            # Simple estimates for major cryptos
-            rates = {
-                'BTC': 43000, 'ETH': 2500, 'ADA': 0.45, 'XRP': 0.55,
-                'LTC': 75, 'DOT': 7, 'LINK': 15, 'UNI': 6
-            }
-            return balance * rates.get(currency, 1.0)
-
-    def _calculate_channel_pnl(self, item, currency, balance):
-        """Calculate P&L percentage for channel."""
-        try:
-            if (item.get('start_currency') == currency and
-                    item.get('start_amount') and
-                    item.get('start_amount') > 0):
-                start_amount = item['start_amount']
-                pnl = balance - start_amount
-                return (pnl / start_amount) * 100
-            return None
-        except:
-            return None
-
-    def _show_wallet_error(self, error_msg):
-        """Show error in wallet table."""
-        for item in self.wallet_tree.get_children():
-            self.wallet_tree.delete(item)
-        self.wallet_tree.insert('', tk.END, values=[error_msg, '', '', '', ''])
-        self.wallet_status_label.config(text="🔴")
-
-    # Add to the auto_refresh method:
-    def auto_refresh(self):
-        """Enhanced auto-refresh with channel support."""
-        try:
-            if self.db:
-                self.refresh_trades()
-
-                # Use enhanced wallet refresh if available
-                if hasattr(self, 'enhanced_wallet'):
-                    self.enhanced_wallet.refresh_wallet()
-                else:
-                    self.refresh_wallet_with_channels()
-
-                self.refresh_llm()
-
-            # Update status bar
-            current_time = datetime.now().strftime("%H:%M:%S")
-            connection_status = "🟢 LIVE" if self.bot_running else ("🟡 MONITORING" if self.db else "🔴 NO DATA")
-            self.status_bar.config(text=f"Last refresh: {current_time} | Status: {connection_status}")
-
-        except Exception as e:
-            print(f"Auto-refresh error: {e}")
-
-        # Schedule next auto-refresh
-        self.root.after(self.auto_refresh_interval, self.auto_refresh)
-
-    def refresh_wallet_with_real_prices(self):
-        """Refresh wallet with real USD prices from market APIs."""
-
-        def run_refresh():
-            """Run the refresh using synchronous requests to avoid thread issues."""
-            try:
-                # Update button state
-                self.root.after(0, lambda: self.usd_refresh_button.config(state='disabled', text="🔄 Loading..."))
-                self.root.after(0, lambda: self.usd_status_label.config(text="Fetching prices...", foreground="orange"))
-
-                # Get wallet data with thread-safe approach
-                balances = {}
-                if not self.db:
-                    self.root.after(0, lambda: self.usd_status_label.config(text="No database connection",
-                                                                            foreground="red"))
-                    return
-
-                try:
-                    # Create a new database connection for this thread
-                    import sqlite3
-                    import os
-
-                    # Determine database path
-                    if self.db_type == "dry_run":
-                        db_path = "dry_run.db"
-                    elif self.db_type == "live":
-                        db_path = "live_trading.db"
-                    else:
-                        # Try to use existing connection carefully
-                        balances = self.db.get_balance()
-
-                    if not balances and self.db_type in ["dry_run", "live"]:
-                        if os.path.exists(db_path):
-                            conn = sqlite3.connect(db_path)
-                            cursor = conn.cursor()
-                            cursor.execute("SELECT currency, balance FROM wallet")
-                            balances = {row[0]: row[1] for row in cursor.fetchall()}
-                            conn.close()
-                        else:
-                            self.root.after(0, lambda: self.usd_status_label.config(text="Database file not found",
-                                                                                    foreground="red"))
-                            return
-
-                except Exception as db_error:
-                    print(f"Database error: {db_error}")
-                    self.root.after(0, lambda: self.usd_status_label.config(text="Database error", foreground="red"))
-                    return
-
-                if not balances:
-                    self.root.after(0, lambda: self.usd_status_label.config(text="No balance data", foreground="red"))
-                    return
-
-                # Prepare data for price fetching
-                crypto_prices = {}
-                stablecoin_list = ['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDD']
-                fiat_list = ['USD', 'EUR', 'GBP']
-
-                # Get prices for cryptocurrencies (excluding stablecoins and fiat)
-                crypto_symbols = [currency for currency in balances.keys()
-                                  if currency not in stablecoin_list + fiat_list and balances[currency] > 0]
-
-                if crypto_symbols:
-                    crypto_prices = self._fetch_crypto_prices_sync(crypto_symbols)
-
-                # Calculate total value and prepare display data
-                total_usd_value = 0
-                wallet_data = []
-
-                for currency, balance in balances.items():
-                    if balance > 0:  # Only show non-zero balances
-                        # Determine USD price
-                        if currency in stablecoin_list:
-                            usd_price = 1.0
-                            usd_value = balance
-                        elif currency == 'USD':
-                            usd_price = 1.0
-                            usd_value = balance
-                        elif currency == 'EUR':
-                            usd_price = 1.1  # Rough EUR/USD rate
-                            usd_value = balance * usd_price
-                        elif currency == 'GBP':
-                            usd_price = 1.25  # Rough GBP/USD rate
-                            usd_value = balance * usd_price
-                        else:
-                            usd_price = crypto_prices.get(currency, 0)
-                            usd_value = balance * usd_price
-
-                        total_usd_value += usd_value
-
-                        wallet_data.append({
-                            'currency': currency,
-                            'balance': balance,
-                            'usd_value': usd_value,
-                            'usd_price': usd_price
-                        })
-
-                result = {
-                    'success': True,
-                    'wallet_data': wallet_data,
-                    'total_usd_value': total_usd_value,
-                    'updated_count': len([p for p in crypto_prices.values() if p > 0])
-                }
-
-                # Update GUI with results
-                self.root.after(0, lambda: self._update_wallet_display_with_prices(result))
-
-            except Exception as e:
-                error_msg = f"Error: {str(e)[:50]}..."
-                self.root.after(0, lambda: self.usd_status_label.config(text=error_msg, foreground="red"))
-                print(f"Error refreshing wallet with real prices: {e}")
-            finally:
-                # Re-enable button
-                self.root.after(0, lambda: self.usd_refresh_button.config(state='normal', text="💲 Refresh USD"))
-
-        # Run in a separate thread to avoid blocking the GUI
-        import threading
-        thread = threading.Thread(target=run_refresh, daemon=True)
-        thread.start()
-
-    def _fetch_crypto_prices_sync(self, symbols: list) -> Dict[str, float]:
-        """Fetch cryptocurrency prices using synchronous requests."""
-        if not symbols:
-            return {}
-
-        try:
-            import requests
-
-            # Convert symbols to CoinGecko IDs (simplified mapping)
-            symbol_to_id = {
-                'BTC': 'bitcoin',
-                'ETH': 'ethereum',
-                'ADA': 'cardano',
-                'XRP': 'ripple',
-                'LTC': 'litecoin',
-                'DOT': 'polkadot',
-                'LINK': 'chainlink',
-                'BNB': 'binancecoin',
-                'SOL': 'solana',
-                'MATIC': 'matic-network',
-                'AVAX': 'avalanche-2',
-                'ATOM': 'cosmos',
-                'UNI': 'uniswap',
-                'DOGE': 'dogecoin',
-                'SHIB': 'shiba-inu',
-            }
-
-            # Build the request
-            coin_ids = []
-            symbol_map = {}
-
-            for symbol in symbols:
-                coin_id = symbol_to_id.get(symbol.upper())
-                if coin_id:
-                    coin_ids.append(coin_id)
-                    symbol_map[coin_id] = symbol.upper()
-
-            if not coin_ids:
-                return {}
-
-            # Make the API request
-            url = "https://api.coingecko.com/api/v3/simple/price"
-            params = {
-                'ids': ','.join(coin_ids),
-                'vs_currencies': 'usd'
-            }
-
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            # Convert back to symbol-based prices
-            prices = {}
-            for coin_id, price_data in data.items():
-                if coin_id in symbol_map and 'usd' in price_data:
-                    symbol = symbol_map[coin_id]
-                    prices[symbol] = float(price_data['usd'])
-
-            return prices
-
-        except Exception as e:
-            print(f"Error fetching crypto prices: {e}")
-            # Fallback to zero prices so function doesn't crash
-            return {symbol: 0.0 for symbol in symbols}
-
-    async def _refresh_wallet_with_prices_async(self):
-        """Async function to fetch real USD prices for cryptocurrencies."""
-        if not self.db:
-            return {"error": "No database connection"}
-
-        try:
-            # Create a new database connection for this thread to avoid SQLite threading issues
-            balances = {}
-            if self.db_type == "dry_run":
-                # Import and create new connection
-                import sqlite3
-                import os
-                from config.settings import BASE_DIR
-                db_path = os.path.join(BASE_DIR, "dry_run.db") if hasattr(self, 'BASE_DIR') else "dry_run.db"
-                if os.path.exists(db_path):
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT currency, balance FROM wallet")
-                    balances = {row[0]: row[1] for row in cursor.fetchall()}
-                    conn.close()
-            elif self.db_type == "live":
-                # Import and create new connection
-                import sqlite3
-                import os
-                from config.settings import BASE_DIR
-                db_path = os.path.join(BASE_DIR, "live_trading.db") if hasattr(self, 'BASE_DIR') else "live_trading.db"
-                if os.path.exists(db_path):
-                    conn = sqlite3.connect(db_path)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT currency, balance FROM wallet")
-                    balances = {row[0]: row[1] for row in cursor.fetchall()}
-                    conn.close()
-            else:
-                # Fallback: try to get balances from the existing connection if possible
-                try:
-                    balances = self.db.get_balance()
-                except Exception as db_error:
-                    return {"error": f"Database access error: {str(db_error)}"}
-
-            if not balances:
-                return {"error": "No balance data"}
-
-            # Prepare data for price fetching
-            crypto_prices = {}
-            stablecoin_list = ['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDD']
-            fiat_list = ['USD', 'EUR', 'GBP']
-
-            # Get prices for cryptocurrencies (excluding stablecoins and fiat)
-            crypto_symbols = [currency for currency in balances.keys()
-                              if currency not in stablecoin_list + fiat_list and balances[currency] > 0]
-
-            if crypto_symbols:
-                crypto_prices = await self._fetch_crypto_prices(crypto_symbols)
-
-            # Calculate total value and prepare display data
-            total_usd_value = 0
-            wallet_data = []
-
-            for currency, balance in balances.items():
-                if balance > 0:  # Only show non-zero balances
-                    # Determine USD price
-                    if currency in stablecoin_list:
-                        usd_price = 1.0
-                        usd_value = balance
-                    elif currency == 'USD':
-                        usd_price = 1.0
-                        usd_value = balance
-                    elif currency == 'EUR':
-                        usd_price = 1.1  # Rough EUR/USD rate - could be made dynamic
-                        usd_value = balance * usd_price
-                    elif currency == 'GBP':
-                        usd_price = 1.25  # Rough GBP/USD rate - could be made dynamic
-                        usd_value = balance * usd_price
-                    else:
-                        usd_price = crypto_prices.get(currency, 0)
-                        usd_value = balance * usd_price
-
-                    total_usd_value += usd_value
-
-                    wallet_data.append({
-                        'currency': currency,
-                        'balance': balance,
-                        'usd_value': usd_value,
-                        'usd_price': usd_price
-                    })
-
-            return {
-                'success': True,
-                'wallet_data': wallet_data,
-                'total_usd_value': total_usd_value,
-                'updated_count': len(crypto_symbols)
-            }
-
-        except Exception as e:
-            return {"error": str(e)}
-
-    async def _fetch_crypto_prices(self, symbols: list) -> Dict[str, float]:
-        """Fetch cryptocurrency prices from CoinGecko API."""
-        if not symbols:
-            return {}
-
-        try:
-            # Use CoinGecko API (free tier)
-            async with httpx.AsyncClient(timeout=10) as client:
-                # Convert symbols to CoinGecko IDs (simplified mapping)
-                symbol_to_id = {
-                    'BTC': 'bitcoin',
-                    'ETH': 'ethereum',
-                    'ADA': 'cardano',
-                    'XRP': 'ripple',
-                    'LTC': 'litecoin',
-                    'DOT': 'polkadot',
-                    'LINK': 'chainlink',
-                    'BNB': 'binancecoin',
-                    'SOL': 'solana',
-                    'MATIC': 'matic-network',
-                    'AVAX': 'avalanche-2',
-                    'ATOM': 'cosmos',
-                    'UNI': 'uniswap',
-                    'DOGE': 'dogecoin',
-                    'SHIB': 'shiba-inu',
-                }
-
-                # Build the request
-                coin_ids = []
-                symbol_map = {}
-
-                for symbol in symbols:
-                    coin_id = symbol_to_id.get(symbol.upper())
-                    if coin_id:
-                        coin_ids.append(coin_id)
-                        symbol_map[coin_id] = symbol.upper()
-
-                if not coin_ids:
-                    return {}
-
-                # Make the API request
-                url = "https://api.coingecko.com/api/v3/simple/price"
-                params = {
-                    'ids': ','.join(coin_ids),
-                    'vs_currencies': 'usd'
-                }
-
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                data = response.json()
-
-                # Convert back to symbol-based prices
-                prices = {}
-                for coin_id, price_data in data.items():
-                    if coin_id in symbol_map and 'usd' in price_data:
-                        symbol = symbol_map[coin_id]
-                        prices[symbol] = float(price_data['usd'])
-
-                return prices
-
-        except Exception as e:
-            print(f"Error fetching crypto prices: {e}")
-            # Return empty dict so the function doesn't crash
-            return {}
-
-    def _update_wallet_display_with_prices(self, result):
-        """Update the wallet display with the fetched price data."""
-        try:
-            if 'error' in result:
-                self.usd_status_label.config(text=f"Error: {result['error']}", foreground="red")
-                return
-
-            if not result.get('success'):
-                self.usd_status_label.config(text="Failed to fetch prices", foreground="red")
-                return
-
-            # Update status indicator
-            if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🟢")
-
-            # Clear existing items
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-
-            # Populate wallet with real prices (sorted by USD value)
-            wallet_data = result['wallet_data']
-            total_usd_value = result['total_usd_value']
-
-            for item in wallet_data:
-                # Color code the USD value based on whether we got a real price
-                usd_value_text = f"${item['usd_value']:.2f}"
-                if item['usd_price'] == 0 and item['currency'] not in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD',
-                                                                       'USDD']:
-                    usd_value_text += " (est.)"  # Mark estimated values
-
-                values = [
-                    item['currency'],
-                    f"{item['balance']:.8f}",
-                    usd_value_text,
-                    f"${item['usd_price']:.2f}" if item['usd_price'] > 0 else "N/A"
-                ]
-                self.wallet_tree.insert('', tk.END, values=values)
-
-            # Update total value
-            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f}")
-
-            # Update status with detailed information and data source
-            updated_count = result.get('updated_count', 0)
-            total_cryptos = result.get('total_cryptos', 0)
-            failed_count = result.get('failed_count', 0)
-            source = result.get('source', 'unknown')
-
-            if total_cryptos > 0:
-                if failed_count == 0:
-                    status_text = f"✅ Updated all {updated_count} prices from {source}"
-                    status_color = "green"
-                elif updated_count > 0:
-                    status_text = f"⚠️ Updated {updated_count}/{total_cryptos} prices from {source} ({failed_count} failed)"
-                    status_color = "orange"
-                else:
-                    status_text = f"❌ Failed to get any prices from {source}"
-                    status_color = "red"
-            else:
-                status_text = "Only stablecoins/fiat found"
-                status_color = "gray"
-
-            self.usd_status_label.config(text=status_text, foreground=status_color)
-
-        except Exception as e:
-            self.usd_status_label.config(text=f"Display error: {str(e)[:30]}...", foreground="red")
-            print(f"Error updating wallet display: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def refresh_wallet(self):
-        """Refresh the wallet table with basic estimated values."""
-        if not self.db:
-            # Show message in empty table
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-            self.wallet_tree.insert('', tk.END, values=['No database', '0.00000000', '$0.00', 'N/A'])
-            self.total_value_label.config(text="Total Value: $0.00")
-            if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🔴")
-            return
-
-        try:
-            # Update status indicator
-            if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🟡")
-
-            # Clear existing items
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-
-            # Get wallet data
-            balances = self.db.get_balance()
-
-            total_usd_value = 0
-
-            # Populate wallet with estimated values
-            for currency, balance in balances.items():
-                if balance > 0:  # Only show non-zero balances
-                    # Estimate USD value (simplified)
-                    if currency in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI']:
-                        usd_value = balance
-                        usd_price = 1.0
-                    else:
-                        # Placeholder estimates for other currencies
-                        placeholder_prices = {
-                            'BTC': 43000.0, 'ETH': 2500.0, 'ADA': 0.45, 'XRP': 0.55,
-                            'LTC': 75.0, 'DOT': 7.0, 'EUR': 1.1
-                        }
-                        usd_price = placeholder_prices.get(currency, 1.0)
-                        usd_value = balance * usd_price
-
-                    total_usd_value += usd_value
-
-                    values = [
-                        currency,
-                        f"{balance:.8f}",
-                        f"${usd_value:.2f}",
-                        f"${usd_price:.2f}" if usd_price != 1.0 else "Est."
-                    ]
-                    self.wallet_tree.insert('', tk.END, values=values)
-
-            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
-
-            # Clear USD status
-            if hasattr(self, 'usd_status_label'):
-                self.usd_status_label.config(text="Use 💲 Refresh USD for real prices", foreground="gray")
-
-            # Update status indicator
-            if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🟢")
-
-        except Exception as e:
-            self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '0.00000000', '$0.00', 'N/A'])
-            if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🔴")
 
     def create_llm_tab(self):
         """Create the LLM responses table tab with channel column."""
@@ -1322,16 +634,8 @@ class TradingBotGUI:
 
         # Set column widths
         column_widths = {
-            'ID': 50,
-            'Timestamp': 130,
-            'Channel': 120,  # New channel column
-            'Action': 60,
-            'Pair': 80,
-            'Confidence': 80,
-            'Entry Range': 100,
-            'Stop Loss': 80,
-            'Take Profit': 120,
-            'Leverage': 80
+            'ID': 50, 'Timestamp': 130, 'Channel': 120, 'Action': 60, 'Pair': 80,
+            'Confidence': 80, 'Entry Range': 100, 'Stop Loss': 80, 'Take Profit': 120, 'Leverage': 80
         }
 
         for col in llm_columns:
@@ -1458,11 +762,29 @@ class TradingBotGUI:
 
     def refresh_wallet(self):
         """Refresh the wallet table with basic estimated values."""
+        # Only refresh if explicitly called (not during auto-refresh)
+        if not hasattr(self, '_manual_wallet_refresh'):
+            return
+
+        self._manual_wallet_refresh = False
+
+        # If using enhanced wallet, delegate to that
+        if self.using_enhanced_wallet and hasattr(self, 'enhanced_wallet'):
+            try:
+                self.enhanced_wallet.refresh_wallet()
+                return
+            except Exception as e:
+                print(f"Enhanced wallet refresh failed: {e}")
+
+        # Fallback wallet refresh
         if not self.db:
             # Show message in empty table
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
-            self.wallet_tree.insert('', tk.END, values=['No database', '', '', ''])
+            if self.wallet_tree:
+                for item in self.wallet_tree.get_children():
+                    self.wallet_tree.delete(item)
+                self.wallet_tree.insert('', tk.END, values=['No database', '0.00000000', '$0.00', 'N/A'])
+                if hasattr(self, 'total_value_label'):
+                    self.total_value_label.config(text="Total Value: $0.00")
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🔴")
             return
@@ -1473,126 +795,52 @@ class TradingBotGUI:
                 self.wallet_status_label.config(text="🟡")
 
             # Clear existing items
-            for item in self.wallet_tree.get_children():
-                self.wallet_tree.delete(item)
+            if self.wallet_tree:
+                for item in self.wallet_tree.get_children():
+                    self.wallet_tree.delete(item)
 
-            # Get wallet data
-            balances = self.db.get_balance()
+                # Get wallet data
+                balances = self.db.get_balance()
+                total_usd_value = 0
 
-            # Populate wallet with just balances, no price estimates
-            for currency, balance in balances.items():
-                if balance > 0:  # Only show non-zero balances
-                    values = [
-                        currency,
-                        f"{balance:.8f}",
-                        "",  # USD value is blank until "Refresh USD" is clicked
-                        ""   # USD price is blank until "Refresh USD" is clicked
-                    ]
-                    self.wallet_tree.insert('', tk.END, values=values)
+                # Populate wallet with estimated values
+                for currency, balance in balances.items():
+                    if balance > 0:  # Only show non-zero balances
+                        # Estimate USD value (simplified)
+                        if currency in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI']:
+                            usd_value = balance
+                            usd_price = 1.0
+                        else:
+                            # Placeholder estimates for other currencies
+                            placeholder_prices = {
+                                'BTC': 43000.0, 'ETH': 2500.0, 'ADA': 0.45, 'XRP': 0.55,
+                                'LTC': 75.0, 'DOT': 7.0, 'EUR': 1.1
+                            }
+                            usd_price = placeholder_prices.get(currency, 1.0)
+                            usd_value = balance * usd_price
 
-            # Clear USD status
-            if hasattr(self, 'usd_status_label'):
-                self.usd_status_label.config(text="Use 💲 Refresh USD for real prices", foreground="gray")
+                        total_usd_value += usd_value
+
+                        values = [
+                            currency,
+                            f"{balance:.8f}",
+                            f"${usd_value:.2f}",
+                            f"${usd_price:.2f}" if usd_price != 1.0 else "Est."
+                        ]
+                        self.wallet_tree.insert('', tk.END, values=values)
+
+                if hasattr(self, 'total_value_label'):
+                    self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
 
             # Update status indicator
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🟢")
 
         except Exception as e:
-            self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '', '', ''])
+            if self.wallet_tree:
+                self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '0.00000000', '$0.00', 'N/A'])
             if hasattr(self, 'wallet_status_label'):
                 self.wallet_status_label.config(text="🔴")
-
-    def refresh_llm(self):
-        """Refresh the LLM responses table."""
-        if not self.db:
-            # Show message in empty table
-            for item in self.llm_tree.get_children():
-                self.llm_tree.delete(item)
-            self.llm_tree.insert('', tk.END, values=['', '', 'No database connection', '', '', '', '', '', ''])
-            if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🔴")
-            return
-
-        try:
-            # Update status indicator
-            if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🟡")
-
-            # Clear existing items
-            for item in self.llm_tree.get_children():
-                self.llm_tree.delete(item)
-
-            # Get LLM responses
-            if hasattr(self.db, 'cursor'):
-                # Using simple DB connection
-                try:
-                    self.db.cursor.execute("SELECT * FROM llm_responses ORDER BY timestamp DESC")
-                    columns = [description[0] for description in self.db.cursor.description]
-                    responses = [dict(zip(columns, row)) for row in self.db.cursor.fetchall()]
-                except Exception as e:
-                    self.llm_tree.insert('', tk.END, values=['', '', f'Error: {e}', '', '', '', '', '', ''])
-                    if hasattr(self, 'llm_status_label'):
-                        self.llm_status_label.config(text="🔴")
-                    return
-            else:
-                # Using full database object
-                cursor = self.db.cursor
-                cursor.execute("SELECT * FROM llm_responses ORDER BY timestamp DESC")
-                columns = [description[0] for description in cursor.description]
-                responses = [dict(zip(columns, row)) for row in cursor.fetchall()]
-
-            # Populate LLM responses
-            for response in responses:
-                pair = f"{response.get('base_currency', '')}/{response.get('quote_currency', '')}"
-                entry_range = response.get('entry_price_range', '')
-                if entry_range and entry_range != 'null':
-                    try:
-                        import json
-                        entry_range = json.loads(entry_range)
-                        if isinstance(entry_range, list) and len(entry_range) >= 2:
-                            entry_range = f"{entry_range[0]}-{entry_range[1]}"
-                        else:
-                            entry_range = str(entry_range)
-                    except:
-                        entry_range = str(entry_range)
-
-                take_profit = response.get('take_profit_targets', '')
-                if take_profit and take_profit != 'null':
-                    try:
-                        import json
-                        take_profit = json.loads(take_profit)
-                        if isinstance(take_profit, list):
-                            take_profit = ', '.join(map(str, take_profit[:3]))  # Show first 3
-                        else:
-                            take_profit = str(take_profit)
-                    except:
-                        take_profit = str(take_profit)
-
-                values = [
-                    response.get('id', ''),
-                    response.get('timestamp', ''),
-                    response.get('action', ''),
-                    pair,
-                    response.get('confidence', ''),
-                    entry_range,
-                    response.get('stop_loss', ''),
-                    take_profit,
-                    response.get('leverage', '')
-                ]
-                self.llm_tree.insert('', tk.END, values=values)
-
-            # Update status indicator
-            if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🟢")
-
-        except Exception as e:
-            self.llm_tree.insert('', tk.END, values=['', '', f'Error: {e}', '', '', '', '', '', ''])
-            if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🔴")
-                self.llm_tree.insert('', tk.END, values=['', '', f'Error: {e}', '', '', '', '', '', ''])
-            if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🔴")
 
     def refresh_llm(self):
         """Refresh the LLM responses table with channel information."""
@@ -1894,9 +1142,7 @@ class TradingBotGUI:
             # Always refresh all tabs for live updates
             if self.db:
                 self.refresh_trades()
-                if not self.loaded_wallet_tab:
-                    self.refresh_wallet()
-                    self.loaded_wallet_tab = True
+                # self.refresh_wallet()
                 self.refresh_llm()
 
             # Update status bar with current time
@@ -1909,6 +1155,24 @@ class TradingBotGUI:
 
         # Schedule next auto-refresh (2 seconds for live updates)
         self.root.after(self.auto_refresh_interval, self.auto_refresh)
+
+    def _manual_refresh_wallet(self):
+        """Manually trigger wallet refresh while preserving filter."""
+        self._manual_wallet_refresh = True
+        # If using enhanced wallet and it has a filter, preserve it
+        if self.using_enhanced_wallet and hasattr(self, 'enhanced_wallet'):
+            if hasattr(self.enhanced_wallet, 'channel_filter'):
+                current_filter = self.enhanced_wallet.channel_filter.get()
+                self.enhanced_wallet.refresh_wallet()
+                # Restore the filter selection
+                if current_filter:
+                    self.enhanced_wallet.channel_filter.set(current_filter)
+                    # Trigger the filter to reapply
+                    self.enhanced_wallet.filter_wallet()
+            else:
+                self.enhanced_wallet.refresh_wallet()
+        else:
+            self.refresh_wallet()
 
 
 def main(integrated_bot=False):
