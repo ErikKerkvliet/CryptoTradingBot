@@ -49,9 +49,10 @@ class TradingApp:
         self.db = TradingDatabase()
         self.trader = None
 
-        # Initialize channel configurations for dry run
+        # Directly use the channel configurations from the settings file.
+        # This correctly loads and respects the CHANNEL_WALLET_CONFIGS from your .env file.
         if self.settings.DRY_RUN:
-            self.channel_configs = self._get_channel_configs()
+            self.channel_configs = self.settings.channel_wallet_configurations
         else:
             self.channel_configs = {}
 
@@ -66,7 +67,7 @@ class TradingApp:
             self.trader = DryRunTrader(
                 exchange=settings.EXCHANGE,
                 trading_mode=settings.TRADING_MODE,
-                channel_configs=self.channel_configs
+                channel_configs=self.channel_configs # Pass the correctly loaded configs
             )
         else:
             self.logger.info(f"⚡ Starting in LIVE {self.settings.TRADING_MODE} mode on {self.settings.EXCHANGE}.")
@@ -89,24 +90,6 @@ class TradingApp:
             self.logger
         )
         self.daily_trades = 0
-
-    def _get_channel_configs(self) -> dict:
-        """Get channel configurations with starting balances."""
-        # You can customize these starting balances per channel
-        default_configs = {
-            "testchannel": {"USDT": 1000.0},
-            "mycryptobottestchannel": {"USDT": 1500.0},
-            "universalcryptosignalss": {"USDT": 2000.0}
-        }
-
-        # Add any channels from settings that aren't in default configs
-        for channel in self.settings.target_channels:
-            channel_name = str(channel).replace('@', '').lower()
-            if channel_name not in default_configs:
-                default_configs[channel_name] = {"USDT": 1000.0}
-
-        self.logger.info(f"📊 Channel configurations: {default_configs}")
-        return default_configs
 
     async def on_message(self, message: str, channel: str):
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")

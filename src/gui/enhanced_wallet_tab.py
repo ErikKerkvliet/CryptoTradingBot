@@ -1,0 +1,716 @@
+"""Enhanced GUI wallet tab with channel-specific wallet support."""
+import tkinter as tk
+from tkinter import ttk, messagebox
+from typing import Dict, Any, List
+import threading
+
+
+class EnhancedWalletTab:
+    """Enhanced wallet tab with channel filtering and management."""
+
+    def __init__(self, parent_frame, db, status_callback=None):
+        self.parent_frame = parent_frame
+        self.db = db
+        self.status_callback = status_callback
+        self.loaded_wallet_tab = False
+
+        # Create the enhanced wallet interface
+        self.create_wallet_widgets()
+
+    def create_wallet_widgets(self):
+        """Create the enhanced wallet interface with channel support."""
+        # Control frame
+        control_frame = ttk.Frame(self.parent_frame)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # Status indicator
+        self.wallet_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
+        self.wallet_status_label.pack(side=tk.LEFT, padx=2)
+
+        # Refresh button
+        ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet).pack(side=tk.LEFT, padx=5)
+
+        # Channel filter
+        ttk.Label(control_frame, text="Filter by channel:").pack(side=tk.LEFT, padx=5)
+        self.channel_filter = ttk.Combobox(control_frame, width=20)
+        self.channel_filter.pack(side=tk.LEFT, padx=5)
+        self.channel_filter.bind('<<ComboboxSelected>>', self.filter_wallet)
+
+        # Add new channel button
+        ttk.Button(control_frame, text="➕ Add Channel",
+                  command=self.show_add_channel_dialog).pack(side=tk.LEFT, padx=5)
+
+        # Performance summary button
+        ttk.Button(control_frame, text="📊 Performance",
+                  command=self.show_performance_dialog).pack(side=tk.LEFT, padx=5)
+
+        # USD value refresh button
+        self.usd_refresh_button = ttk.Button(control_frame, text="💲 Refresh USD",
+                                           command=self.refresh_wallet_with_real_prices)
+        self.usd_refresh_button.pack(side=tk.LEFT, padx=5)
+
+        # Total value label
+        self.total_value_label = ttk.Label(control_frame, text="Total Value: Calculating...",
+                                         font=('Arial', 10, 'bold'))
+        self.total_value_label.pack(side=tk.RIGHT, padx=5)
+
+        # Status label for USD refresh
+        self.usd_status_label = ttk.Label(control_frame, text="", font=('Arial', 9), foreground="gray")
+        self.usd_status_label.pack(side=tk.RIGHT, padx=5)
+
+        # Wallet treeview with channel column
+        tree_frame = ttk.Frame(self.parent_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.wallet_tree = ttk.Treeview(tree_frame, show='headings')
+
+        # Enhanced columns including channel
+        wallet_columns = ['Channel', 'Currency', 'Balance', 'USD Value (Est.)', 'USD Price', 'P&L %']
+        self.wallet_tree['columns'] = wallet_columns
+
+        column_widths = {
+            'Channel': 150,
+            'Currency': 80,
+            'Balance': 120,
+            'USD Value (Est.)': 100,
+            'USD Price': 80,
+            'P&L %': 80
+        }
+
+        for col in wallet_columns:
+            self.wallet_tree.heading(col, text=col, command=lambda c=col: self.sort_wallet_column(c))
+            self.wallet_tree.column(col, width=column_widths.get(col, 100))
+
+        # Scrollbars for wallet
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.wallet_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.wallet_tree.xview)
+
+        self.wallet_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        # Grid layout
+        self.wallet_tree.grid(row=0, column=0, sticky='nsew')
+        v_scrollbar.grid(row=0, column=1, sticky='ns')
+        h_scrollbar.grid(row=1, column=0, sticky='ew')
+
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        # Initialize sort states
+        self.sort_reverse = {col: False for col in wallet_columns}
+
+    def sort_wallet_column(self, col):
+        """Sort the wallet table by the specified column."""
+        try:
+            data = [(self.wallet_tree.set(item, col), item) for item in self.wallet_tree.get_children('')]
+
+            # Try to sort numerically for numeric columns
+            if col in ['Balance', 'USD Value (Est.)', 'USD Price', 'P&L %']:
+                try:
+                    data.sort(key=lambda x: float(x[0].replace('$', '').replace('%', '').replace(',', ''))
+                             if x[0] and x[0] not in ['N/A', '', '-'] else 0,
+                             reverse=self.sort_reverse[col])
+                except (ValueError, TypeError):
+                    data.sort(key=lambda x: str(x[0]).lower(), reverse=self.sort_reverse[col])
+            else:
+                data.sort(key=lambda x: str(x[0]).lower(), reverse=self.sort_reverse[col])
+
+            # Rearrange items
+            for index, (_, item) in enumerate(data):
+                self.wallet_tree.move(item, '', index)
+
+            # Toggle sort direction
+            self.sort_reverse[col] = not self.sort_reverse[col]
+
+            # Update column header
+            direction = "↓" if self.sort_reverse[col] else "↑"
+            self.wallet_tree.heading(col, text=f"{col} {direction}")
+
+        except Exception as e:
+            messagebox.showerror("Sort Error", f"Failed to sort column {col}: {e}")
+
+    def refresh_wallet(self):
+        """Refresh the wallet table with channel-specific data."""
+        if not self.db:
+            self._show_no_database_message()
+            return
+
+        try:
+            self.wallet_status_label.config(text="🟡")
+
+            # Clear existing items
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            # Get all channel balances
+            if hasattr(self.db, 'get_all_channel_balances'):
+                wallet_data = self.db.get_all_channel_balances()
+            else:
+                # Fallback for simple database connections
+                wallet_data = self._get_wallet_data_fallback()
+
+            # Filter out template/example data
+            wallet_data = self._filter_template_data(wallet_data)
+
+            # Update channel filter
+            channels = set(['All'])
+            for item in wallet_data:
+                channel_name = item.get('channel', 'global')
+                # Skip template channels in filter
+                if not self._is_template_channel(channel_name):
+                    channels.add(channel_name)
+
+            self.channel_filter['values'] = sorted(list(channels))
+            if not self.channel_filter.get():
+                self.channel_filter.set('All')
+
+            # Populate wallet table
+            total_usd_value = 0
+            displayed_count = 0
+            for item in wallet_data:
+                if item['balance'] > 0:  # Only show non-zero balances
+                    channel = item.get('channel', 'global')
+                    currency = item['currency']
+                    balance = item['balance']
+
+                    # Skip if this looks like template data
+                    if self._is_template_channel(channel):
+                        continue
+
+                    # Calculate basic USD estimate (simplified)
+                    usd_value = self._estimate_usd_value(currency, balance)
+                    total_usd_value += usd_value
+
+                    # Calculate P&L if we have start amount
+                    pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
+
+                    values = [
+                        channel,
+                        currency,
+                        f"{balance:.8f}",
+                        f"${usd_value:.2f}",
+                        "Est.",  # Will be updated with real prices if refreshed
+                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+                    displayed_count += 1
+
+            if displayed_count == 0:
+                # Show message if no real data found
+                self.wallet_tree.insert('', tk.END, values=[
+                    'No wallet data', 'Configure channels', 'in your .env file', '', '', ''
+                ])
+
+            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
+            self.usd_status_label.config(text="Use 💲 Refresh USD for real prices", foreground="gray")
+            self.wallet_status_label.config(text="🟢")
+
+        except Exception as e:
+            self._show_error_in_tree(f'Error: {e}')
+            self.wallet_status_label.config(text="🔴")
+
+    def _filter_template_data(self, wallet_data):
+        """Filter out template/example data."""
+        filtered_data = []
+        for item in wallet_data:
+            channel = item.get('channel', 'global')
+
+            # Skip template channels
+            if self._is_template_channel(channel):
+                continue
+
+            # Skip if balance looks like a template value
+            balance = item.get('balance', 0)
+            if balance in [1000.0, 1500.0, 2000.0] and self._is_template_channel(channel):
+                continue
+
+            filtered_data.append(item)
+
+        return filtered_data
+
+    def _is_template_channel(self, channel_name):
+        """Check if a channel name looks like a template."""
+        if not channel_name or channel_name == 'global':
+            return False
+
+        template_patterns = [
+            'test_channel',
+            'example',
+            'template',
+            'demo'
+        ]
+
+        channel_lower = str(channel_name).lower()
+        return any(pattern in channel_lower for pattern in template_patterns)
+
+    def filter_wallet(self, event=None):
+        """Filter wallet by selected channel."""
+        if not self.db:
+            return
+
+        try:
+            selected_channel = self.channel_filter.get()
+
+            # Clear existing items
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            # Get wallet data
+            if hasattr(self.db, 'get_all_channel_balances'):
+                all_wallet_data = self.db.get_all_channel_balances()
+            else:
+                all_wallet_data = self._get_wallet_data_fallback()
+
+            # Filter out template data first
+            all_wallet_data = self._filter_template_data(all_wallet_data)
+
+            # Then filter by channel
+            if selected_channel == 'All':
+                filtered_data = all_wallet_data
+            else:
+                filtered_data = [item for item in all_wallet_data
+                               if item.get('channel', 'global') == selected_channel]
+
+            # Populate filtered data
+            total_usd_value = 0
+            for item in filtered_data:
+                if item['balance'] > 0:
+                    channel = item.get('channel', 'global')
+                    currency = item['currency']
+                    balance = item['balance']
+
+                    usd_value = self._estimate_usd_value(currency, balance)
+                    total_usd_value += usd_value
+
+                    pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
+
+                    values = [
+                        channel,
+                        currency,
+                        f"{balance:.8f}",
+                        f"${usd_value:.2f}",
+                        "Est.",
+                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+
+            if not filtered_data:
+                self.wallet_tree.insert('', tk.END, values=[
+                    f'No data for {selected_channel}', 'Check your', '.env configuration', '', '', ''
+                ])
+
+            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Filtered)")
+
+            if self.status_callback:
+                self.status_callback(f"Filtered wallet: {len(filtered_data)} records for {selected_channel}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to filter wallet: {e}")
+
+    def show_add_channel_dialog(self):
+        """Show dialog to add a new channel with starting balance."""
+        dialog = tk.Toplevel(self.parent_frame)
+        dialog.title("Add New Channel")
+        dialog.geometry("400x350")
+        dialog.transient(self.parent_frame)
+        dialog.grab_set()
+
+        # Instructions
+        instruction_label = ttk.Label(dialog,
+            text="Add a new channel with starting balance.\nThis creates an isolated wallet for the channel.",
+            font=('Arial', 9))
+        instruction_label.pack(pady=10)
+
+        # Channel name
+        ttk.Label(dialog, text="Channel Name:", font=('Arial', 10, 'bold')).pack(pady=5)
+        ttk.Label(dialog, text="(without @ symbol, e.g. 'mychannelname')",
+                 font=('Arial', 8), foreground='gray').pack()
+        channel_var = tk.StringVar()
+        channel_entry = ttk.Entry(dialog, textvariable=channel_var, width=30)
+        channel_entry.pack(pady=5)
+
+        # Starting currency
+        ttk.Label(dialog, text="Starting Currency:", font=('Arial', 10, 'bold')).pack(pady=(15,5))
+        currency_var = tk.StringVar(value="USDT")
+        currency_combo = ttk.Combobox(dialog, textvariable=currency_var,
+                                     values=["USDT", "USDC", "BTC", "ETH", "USD", "EUR"], width=27)
+        currency_combo.pack(pady=5)
+
+        # Starting amount
+        ttk.Label(dialog, text="Starting Amount:", font=('Arial', 10, 'bold')).pack(pady=(15,5))
+        amount_var = tk.StringVar(value="1000.0")
+        amount_entry = ttk.Entry(dialog, textvariable=amount_var, width=30)
+        amount_entry.pack(pady=5)
+
+        # Warning label
+        warning_label = ttk.Label(dialog,
+            text="⚠️  Note: This creates a test wallet. For production use,\nadd channels to your .env CHANNEL_WALLET_CONFIGS",
+            font=('Arial', 8), foreground='orange')
+        warning_label.pack(pady=10)
+
+        def add_channel():
+            try:
+                channel = channel_var.get().strip().lower().replace('@', '')
+                currency = currency_var.get().strip().upper()
+                amount = float(amount_var.get().strip())
+
+                if not channel:
+                    messagebox.showerror("Error", "Channel name is required")
+                    return
+
+                if amount <= 0:
+                    messagebox.showerror("Error", "Amount must be positive")
+                    return
+
+                # Check if channel looks like template
+                if self._is_template_channel(channel):
+                    result = messagebox.askyesno("Template Channel",
+                        f"'{channel}' looks like a template channel name.\n"
+                        f"Are you sure you want to add it?")
+                    if not result:
+                        return
+
+                # Initialize channel wallet
+                if hasattr(self.db, 'initialize_channel_wallet'):
+                    self.db.initialize_channel_wallet(channel, currency, amount)
+                    messagebox.showinfo("Success",
+                        f"✅ Added '{channel}' with {amount} {currency}\n\n"
+                        f"💡 For permanent configuration, add this to your .env:\n"
+                        f"CHANNEL_WALLET_CONFIGS={channel}:{currency}:{amount}")
+                    dialog.destroy()
+                    self.refresh_wallet()
+                else:
+                    messagebox.showerror("Error", "Database doesn't support channel wallets")
+
+            except ValueError:
+                messagebox.showerror("Error", "Invalid amount value - please enter a number")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to add channel: {e}")
+
+        # Buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=20)
+
+        ttk.Button(button_frame, text="Add Channel", command=add_channel).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+        # Focus on channel entry
+        channel_entry.focus_set()
+
+    def show_performance_dialog(self):
+        """Show channel performance summary dialog."""
+        dialog = tk.Toplevel(self.parent_frame)
+        dialog.title("Channel Performance Summary")
+        dialog.geometry("700x450")
+        dialog.transient(self.parent_frame)
+
+        # Header
+        header_label = ttk.Label(dialog, text="📊 Channel Performance Overview",
+                               font=('Arial', 12, 'bold'))
+        header_label.pack(pady=10)
+
+        # Performance tree
+        tree_frame = ttk.Frame(dialog)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        perf_tree = ttk.Treeview(tree_frame, show='headings')
+        perf_columns = ['Channel', 'Start Amount', 'Current Amount', 'P&L', 'P&L %', 'Total Trades', 'Status']
+        perf_tree['columns'] = perf_columns
+
+        column_widths = {'Channel': 120, 'Start Amount': 100, 'Current Amount': 100,
+                        'P&L': 80, 'P&L %': 80, 'Total Trades': 80, 'Status': 80}
+
+        for col in perf_columns:
+            perf_tree.heading(col, text=col)
+            perf_tree.column(col, width=column_widths.get(col, 80))
+
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=perf_tree.yview)
+        perf_tree.configure(yscrollcommand=scrollbar.set)
+
+        perf_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Get performance data
+        try:
+            if hasattr(self.db, 'get_all_channel_balances'):
+                # Get unique channels
+                self.db.cursor.execute("SELECT DISTINCT telegram_channel FROM wallet WHERE telegram_channel IS NOT NULL")
+                channels = [row[0] for row in self.db.cursor.fetchall()]
+
+                total_channels = 0
+                profitable_channels = 0
+
+                for channel in channels:
+                    # Skip template channels
+                    if self._is_template_channel(channel):
+                        continue
+
+                    # Get channel performance
+                    configs = self.db.get_channel_configs() if hasattr(self.db, 'get_channel_configs') else []
+                    start_amount = 1000.0
+                    start_currency = "USDT"
+
+                    for config in configs:
+                        if config.get('channel_name') == channel:
+                            start_amount = config.get('start_amount', 1000.0)
+                            start_currency = config.get('start_currency', 'USDT')
+                            break
+
+                    # Get current balance
+                    current_balances = self.db.get_channel_balance(channel) if hasattr(self.db, 'get_channel_balance') else {}
+                    current_amount = current_balances.get(start_currency, 0)
+
+                    # Calculate P&L
+                    pnl = current_amount - start_amount
+                    pnl_pct = (pnl / start_amount) * 100 if start_amount > 0 else 0
+
+                    # Get trade count
+                    self.db.cursor.execute("SELECT COUNT(*) FROM trades WHERE telegram_channel = ?", (channel,))
+                    trade_count = self.db.cursor.fetchone()[0]
+
+                    # Status
+                    if pnl > 0:
+                        status = "✅ Profit"
+                        profitable_channels += 1
+                    elif pnl < 0:
+                        status = "❌ Loss"
+                    else:
+                        status = "➖ Break-even"
+
+                    values = [
+                        channel,
+                        f"{start_amount:.2f} {start_currency}",
+                        f"{current_amount:.2f} {start_currency}",
+                        f"{pnl:+.2f} {start_currency}",
+                        f"{pnl_pct:+.1f}%",
+                        str(trade_count),
+                        status
+                    ]
+
+                    perf_tree.insert('', tk.END, values=values)
+                    total_channels += 1
+
+                # Summary at bottom
+                if total_channels == 0:
+                    perf_tree.insert('', tk.END, values=[
+                        'No channels found', 'Check .env config', '', '', '', '', '⚠️'
+                    ])
+
+                # Summary label
+                summary_text = f"📈 Summary: {profitable_channels}/{total_channels} channels profitable"
+                if total_channels > 0:
+                    profit_rate = (profitable_channels / total_channels) * 100
+                    summary_text += f" ({profit_rate:.1f}%)"
+
+            else:
+                perf_tree.insert('', tk.END, values=['Database not supported', '', '', '', '', '', '❌'])
+                summary_text = "❌ Performance tracking not available"
+
+        except Exception as e:
+            perf_tree.insert('', tk.END, values=[f'Error: {str(e)[:50]}...', '', '', '', '', '', '❌'])
+            summary_text = f"❌ Error loading performance data"
+
+        # Summary and close button
+        summary_label = ttk.Label(dialog, text=summary_text, font=('Arial', 10, 'bold'))
+        summary_label.pack(pady=5)
+
+        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
+
+    def refresh_wallet_with_real_prices(self):
+        """Refresh wallet with real USD prices (same as before but enhanced for channels)."""
+        def run_refresh():
+            try:
+                self.usd_refresh_button.config(state='disabled', text="🔄 Loading...")
+                self.usd_status_label.config(text="Fetching prices...", foreground="orange")
+
+                # Get all wallet data
+                if hasattr(self.db, 'get_all_channel_balances'):
+                    wallet_data = self.db.get_all_channel_balances()
+                else:
+                    wallet_data = self._get_wallet_data_fallback()
+
+                # Filter out template data
+                wallet_data = self._filter_template_data(wallet_data)
+
+                # Group by currency to minimize API calls
+                currencies_to_fetch = set()
+                for item in wallet_data:
+                    if item['balance'] > 0:
+                        currency = item['currency']
+                        if currency not in ['USDT', 'USDC', 'USD', 'EUR', 'GBP']:
+                            currencies_to_fetch.add(currency)
+
+                # Fetch prices
+                crypto_prices = {}
+                if currencies_to_fetch:
+                    crypto_prices = self._fetch_crypto_prices_sync(list(currencies_to_fetch))
+
+                # Update display
+                self._update_wallet_display_with_real_prices(wallet_data, crypto_prices)
+
+            except Exception as e:
+                self.usd_status_label.config(text=f"Error: {str(e)[:50]}...", foreground="red")
+            finally:
+                self.usd_refresh_button.config(state='normal', text="💲 Refresh USD")
+
+        threading.Thread(target=run_refresh, daemon=True).start()
+
+    def _get_wallet_data_fallback(self):
+        """Fallback method for simple database connections."""
+        try:
+            # Try to get channel-specific data
+            self.db.cursor.execute("""
+                SELECT currency, balance, telegram_channel 
+                FROM wallet 
+                ORDER BY telegram_channel, currency
+            """)
+
+            wallet_data = []
+            for row in self.db.cursor.fetchall():
+                wallet_data.append({
+                    'currency': row[0],
+                    'balance': row[1],
+                    'channel': row[2] or 'global',
+                    'start_amount': None,
+                    'start_currency': None
+                })
+            return wallet_data
+        except:
+            # Ultimate fallback - just basic balance
+            try:
+                self.db.cursor.execute("SELECT currency, balance FROM wallet")
+                wallet_data = []
+                for row in self.db.cursor.fetchall():
+                    wallet_data.append({
+                        'currency': row[0],
+                        'balance': row[1],
+                        'channel': 'global',
+                        'start_amount': None,
+                        'start_currency': None
+                    })
+                return wallet_data
+            except:
+                return []
+
+    def _estimate_usd_value(self, currency, balance):
+        """Estimate USD value with simple rates."""
+        if currency in ['USD', 'USDT', 'USDC', 'BUSD', 'DAI']:
+            return balance
+        elif currency == 'EUR':
+            return balance * 1.1
+        elif currency == 'GBP':
+            return balance * 1.25
+        else:
+            # Placeholder estimates
+            rates = {'BTC': 43000, 'ETH': 2500, 'ADA': 0.45, 'XRP': 0.55, 'LTC': 75}
+            return balance * rates.get(currency, 1.0)
+
+    def _calculate_pnl_percentage(self, item, currency, balance):
+        """Calculate P&L percentage for a currency in a channel."""
+        try:
+            if item.get('start_currency') == currency and item.get('start_amount'):
+                start_amount = item['start_amount']
+                pnl = balance - start_amount
+                return (pnl / start_amount) * 100 if start_amount > 0 else 0
+            return None
+        except:
+            return None
+
+    def _fetch_crypto_prices_sync(self, symbols):
+        """Fetch crypto prices synchronously."""
+        try:
+            import requests
+
+            symbol_to_id = {
+                'BTC': 'bitcoin', 'ETH': 'ethereum', 'ADA': 'cardano',
+                'XRP': 'ripple', 'LTC': 'litecoin', 'DOT': 'polkadot'
+            }
+
+            coin_ids = [symbol_to_id.get(s.upper()) for s in symbols if symbol_to_id.get(s.upper())]
+
+            if not coin_ids:
+                return {}
+
+            url = "https://api.coingecko.com/api/v3/simple/price"
+            params = {'ids': ','.join(coin_ids), 'vs_currencies': 'usd'}
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            prices = {}
+            for coin_id, price_data in data.items():
+                symbol = next((k for k, v in symbol_to_id.items() if v == coin_id), None)
+                if symbol and 'usd' in price_data:
+                    prices[symbol] = float(price_data['usd'])
+
+            return prices
+
+        except Exception as e:
+            print(f"Error fetching prices: {e}")
+            return {}
+
+    def _update_wallet_display_with_real_prices(self, wallet_data, crypto_prices):
+        """Update the wallet display with real prices."""
+        try:
+            # Clear and repopulate with real prices
+            for item in self.wallet_tree.get_children():
+                self.wallet_tree.delete(item)
+
+            total_usd_value = 0
+            updated_count = len([p for p in crypto_prices.values() if p > 0])
+
+            for item in wallet_data:
+                if item['balance'] > 0:
+                    channel = item.get('channel', 'global')
+                    currency = item['currency']
+                    balance = item['balance']
+
+                    # Get real USD price
+                    if currency in ['USDT', 'USDC', 'USD', 'BUSD', 'DAI']:
+                        usd_price = 1.0
+                        usd_value = balance
+                    elif currency == 'EUR':
+                        usd_price = 1.1
+                        usd_value = balance * usd_price
+                    elif currency == 'GBP':
+                        usd_price = 1.25
+                        usd_value = balance * usd_price
+                    else:
+                        usd_price = crypto_prices.get(currency, 0)
+                        usd_value = balance * usd_price
+
+                    total_usd_value += usd_value
+
+                    # Calculate P&L
+                    pnl_pct = self._calculate_pnl_percentage(item, currency, balance)
+
+                    values = [
+                        channel,
+                        currency,
+                        f"{balance:.8f}",
+                        f"${usd_value:.2f}",
+                        f"${usd_price:.2f}" if usd_price > 0 else "N/A",
+                        f"{pnl_pct:.1f}%" if pnl_pct is not None else "-"
+                    ]
+                    self.wallet_tree.insert('', tk.END, values=values)
+
+            self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f}")
+
+            status_text = f"✅ Updated {updated_count} prices from CoinGecko"
+            self.usd_status_label.config(text=status_text, foreground="green")
+
+        except Exception as e:
+            self.usd_status_label.config(text=f"Display error: {str(e)[:30]}...", foreground="red")
+
+    def _show_no_database_message(self):
+        """Show message when no database is available."""
+        for item in self.wallet_tree.get_children():
+            self.wallet_tree.delete(item)
+        self.wallet_tree.insert('', tk.END, values=['No database', '', '', '', '', ''])
+        self.total_value_label.config(text="Total Value: $0.00")
+        self.wallet_status_label.config(text="🔴")
+
+    def _show_error_in_tree(self, error_msg):
+        """Show error message in the tree."""
+        self.wallet_tree.insert('', tk.END, values=[error_msg, '', '', '', '', ''])

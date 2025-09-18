@@ -122,52 +122,48 @@ class Settings(BaseSettings):
     @property
     def channel_wallet_configurations(self) -> Dict[str, Dict[str, float]]:
         """
-        Parse channel wallet configurations from environment variable.
-        Format: "channel1:USDT:1000,channel2:USDT:2000,channel3:BTC:0.1"
-        Returns: {"channel1": {"USDT": 1000.0}, "channel2": {"USDT": 2000.0}, ...}
+        Parse channel wallet configurations from the environment variable.
+        This ensures all target channels have a default configuration, which is
+        then overridden by specific settings in CHANNEL_WALLET_CONFIGS.
         """
-        configs = {}
+        # 1. Start with default wallets for ALL target channels.
+        configs: Dict[str, Dict[str, float]] = {}
+        default_amount = 1000.0
+        default_currency = "USDT"
 
-        print(f"🔧 Debug CHANNEL_WALLET_CONFIGS raw value: '{self.CHANNEL_WALLET_CONFIGS}'")
+        print(f"🔧 Initializing default wallets for all target channels: {self.target_channels}")
+        for channel in self.target_channels:
+            channel_name = str(channel).replace('@', '').lower()
+            if channel_name:  # Ensure we don't add empty strings
+                configs[channel_name] = {default_currency: default_amount}
 
+        # 2. If CHANNEL_WALLET_CONFIGS is set, use it to override the defaults.
+        print(f"🔧 Parsing CHANNEL_WALLET_CONFIGS raw value: '{self.CHANNEL_WALLET_CONFIGS}'")
         if self.CHANNEL_WALLET_CONFIGS and self.CHANNEL_WALLET_CONFIGS.strip():
             try:
-                # Parse the configuration string
-                channel_configs = self.CHANNEL_WALLET_CONFIGS.split(',')
-
-                for config in channel_configs:
-                    config = config.strip()
-                    if ':' in config:
-                        parts = config.split(':')
+                channel_configs_str = self.CHANNEL_WALLET_CONFIGS.split(',')
+                for config_str in channel_configs_str:
+                    config_str = config_str.strip()
+                    if ':' in config_str:
+                        parts = config_str.split(':')
                         if len(parts) == 3:
                             channel_name = parts[0].strip().replace('@', '').lower()
                             currency = parts[1].strip().upper()
                             amount = float(parts[2].strip())
 
-                            # Skip template/placeholder values
-                            if any(template in channel_name.lower() for template in ['test', 'example', 'channel']):
-                                if any(template in self.CHANNEL_WALLET_CONFIGS.lower() for template in ['testchannel', 'mycryptobottestchannel']):
-                                    print(f"⚠️  Skipping template channel config: {channel_name}")
-                                    continue
-
-                            if channel_name not in configs:
-                                configs[channel_name] = {}
-                            configs[channel_name][currency] = amount
-
+                            if channel_name:
+                                print(f"   -> Found override for '{channel_name}': {amount} {currency}")
+                                # This will add or update the entry for this channel
+                                configs[channel_name] = {currency: amount}
+                            else:
+                                print(f"   -> Warning: Skipping invalid config entry: {config_str}")
+                        else:
+                            print(f"   -> Warning: Skipping malformed config entry (expected 3 parts): {config_str}")
             except Exception as e:
                 print(f"⚠️ Warning: Error parsing CHANNEL_WALLET_CONFIGS: {e}")
-                print("   Using default configurations instead")
+                print("   Continuing with default configurations for channels.")
 
-        # If no valid configurations found, create minimal defaults from actual target channels
-        if not configs and self.target_channels:
-            print("🔧 No valid channel configs found, creating defaults from target channels")
-            for channel in self.target_channels:
-                channel_name = str(channel).replace('@', '').lower()
-                # Only add if it doesn't look like a template
-                if not any(template in channel_name.lower() for template in ['test', 'example']):
-                    configs[channel_name] = {"USDT": 1000.0}
-
-        print(f"🔧 Final channel configurations: {configs}")
+        print(f"🔧 Final channel configurations loaded: {configs}")
         return configs
 
     def validate_required_fields(self):
