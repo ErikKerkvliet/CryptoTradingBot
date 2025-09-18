@@ -8,3 +8,4 @@ tests/
 *.session-journal
 trading_bot.log*
 test_*
+debug_*

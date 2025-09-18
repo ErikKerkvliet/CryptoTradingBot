@@ -30,7 +30,7 @@ class FuturesPairValidator:
             self._cache = {
                 item["symbol"]
                 for item in data.get("data", [])
-                if item.get("quoteCurrency") == "USDT"
+                if item.get("quoteCoin") == "USDT"
             }
         self._cache_time = now
 

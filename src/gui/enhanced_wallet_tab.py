@@ -408,7 +408,7 @@ class EnhancedWalletTab:
         """Show channel performance summary dialog."""
         dialog = tk.Toplevel(self.parent_frame)
         dialog.title("Channel Performance Summary")
-        dialog.geometry("700x450")
+        dialog.geometry("1000x450")
         dialog.transient(self.parent_frame)
 
         # Header

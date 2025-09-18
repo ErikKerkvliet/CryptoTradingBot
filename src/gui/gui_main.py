@@ -135,6 +135,7 @@ class TradingBotGUI:
         self.wallet_tree = None
         self.enhanced_wallet = None
         self.using_enhanced_wallet = False
+        self.wallet_loaded = False
 
         if not self.settings_loaded:
             # Try to create a minimal database connection for read-only access
@@ -170,7 +171,7 @@ class TradingBotGUI:
         # Set title based on mode
         mode_text = "INTEGRATED BOT" if run_bot else f"{self.db_type.upper() if self.db_type != 'none' else 'NO DB'}"
         self.root.title(f"Trading Bot Monitor ({mode_text})")
-        self.root.geometry("1200x800")
+        self.root.geometry("1280x800")
 
         # Queue for thread-safe GUI updates
         self.gui_queue = queue.Queue()
@@ -1142,7 +1143,9 @@ class TradingBotGUI:
             # Always refresh all tabs for live updates
             if self.db:
                 self.refresh_trades()
-                # self.refresh_wallet()
+                if not self.wallet_loaded:
+                    self._manual_refresh_wallet()
+                    self.wallet_loaded = True
                 self.refresh_llm()
 
             # Update status bar with current time
