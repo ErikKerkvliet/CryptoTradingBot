@@ -117,7 +117,7 @@ class DryRunTrader:
         return pair_upper[:-4] if pair_upper.endswith("USDT") else pair_upper[:-3], "USDT"
 
     async def _record_wallet_snapshot(self, channel: str):
-        """Records the current total USD value of a channel's wallet."""
+        """Records the current total USD value and full balance snapshot of a channel's wallet."""
         if not channel:
             return
 
@@ -126,17 +126,18 @@ class DryRunTrader:
             total_usd_value = 0.0
 
             for currency, amount in balances.items():
-                if amount > 0:
+                if amount > 1e-9: # Use a small threshold for floating point precision
                     if currency.upper() in ["USDT", "USDC", "USD"]:
                         total_usd_value += amount
                     else:
                         # Fetch price for non-stablecoins to get USD value
                         # Assuming the quote is always USDT for price fetching
-                        pair = f"{currency.upper()}USDT"
-                        price = await self.get_market_price(pair)
+                        pair_for_price = f"{currency.upper()}USDT"
+                        price = await self.get_market_price(pair_for_price)
                         total_usd_value += amount * price
 
-            self.db.add_wallet_history_record(channel, total_usd_value)
+            # Pass the full balances dictionary to the database method
+            self.db.add_wallet_history_record(channel, total_usd_value, balances)
             print(f"📈 Recorded wallet snapshot for '{channel}': ${total_usd_value:.2f}")
 
         except Exception as e:

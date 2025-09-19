@@ -9,7 +9,7 @@ class TradingDatabase:
     """Enhanced database with channel-specific wallet management."""
     def __init__(self, db_name: str = None):
         if not db_name:
-            db_name = f"{'dryrun' if settings.DRY_RUN else 'live'}_trading.db"
+            db_name = f"{'dry' if settings.DRY_RUN else 'live'}_trading.db"
 
         self.db_path = BASE_DIR / db_name
         self.conn = sqlite3.connect(self.db_path)
@@ -81,14 +81,15 @@ class TradingDatabase:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
-        # NEW: Wallet history table for performance tracking
+
+        # MODIFIED: Wallet history table with full balance snapshot
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS wallet_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 channel_name TEXT NOT NULL,
-                total_value_usd REAL NOT NULL
+                total_value_usd REAL NOT NULL,
+                balances_json TEXT
             )
         """)
         self.conn.commit()
@@ -110,17 +111,67 @@ class TradingDatabase:
         # Note: channel_configs are preserved across sessions.
         self.conn.commit()
 
-    def add_wallet_history_record(self, channel_name: str, total_value_usd: float):
+    def add_wallet_history_record(self, channel_name: str, total_value_usd: float, balances: Dict[str, float]):
         """Adds a new wallet balance snapshot to the history table."""
         try:
+            balances_str = json.dumps(balances)
             self.cursor.execute("""
-                INSERT INTO wallet_history (channel_name, total_value_usd)
-                VALUES (?, ?)
-            """, (channel_name, total_value_usd))
+                INSERT INTO wallet_history (channel_name, total_value_usd, balances_json)
+                VALUES (?, ?, ?)
+            """, (channel_name, total_value_usd, balances_str))
             self.conn.commit()
         except Exception as e:
             print(f"❌ Error adding wallet history record: {e}")
             self.conn.rollback()
+
+    def get_historical_assets_summary(self, channel_name: str) -> Dict[str, float]:
+        """
+        Gets a summary of all assets ever held by a channel, returning the max balance recorded for each.
+        This is used to build a historical asset allocation pie chart.
+        """
+        self.cursor.execute("SELECT balances_json FROM wallet_history WHERE channel_name = ?", (channel_name,))
+        rows = self.cursor.fetchall()
+
+        max_balances: Dict[str, float] = {}
+
+        for row in rows:
+            if row and row[0]:  # Check if row and balances_json are not None
+                try:
+                    balances = json.loads(row[0])
+                    for currency, balance in balances.items():
+                        # Track the peak balance for each currency
+                        if balance > max_balances.get(currency, 0):
+                            max_balances[currency] = balance
+                except (json.JSONDecodeError, TypeError):
+                    continue  # Skip malformed or empty data
+
+        # Also include current balances in case there's no history yet
+        current_balances = self.get_channel_balance(channel_name)
+        for currency, balance in current_balances.items():
+            if balance > max_balances.get(currency, 0):
+                max_balances[currency] = balance
+
+        return max_balances
+
+    def get_wallet_history_for_channel(self, channel_name: str) -> List[Dict[str, Any]]:
+        """Gets the full, ordered wallet history for a given channel."""
+        self.cursor.execute("""
+            SELECT timestamp, balances_json 
+            FROM wallet_history 
+            WHERE channel_name = ? 
+            ORDER BY timestamp ASC
+        """, (channel_name,))
+
+        history = []
+        for row in self.cursor.fetchall():
+            try:
+                history.append({
+                    "timestamp": row[0],
+                    "balances": json.loads(row[1])
+                })
+            except (json.JSONDecodeError, TypeError):
+                continue # Skip malformed records
+        return history
 
     def initialize_channel_wallet(self, channel: str, currency: str = "USDT", amount: float = 1000.0):
         """Initialize a channel's wallet with starting balance."""

@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox
 from typing import Dict, Any, List
 import threading
 from collections import defaultdict
+from .performance_dialog import PerformanceDialog
 
 
 class EnhancedWalletTab:
@@ -43,7 +44,7 @@ class EnhancedWalletTab:
 
         # Performance summary button
         ttk.Button(control_frame, text="📊 Performance",
-                  command=self.show_performance_dialog).pack(side=tk.LEFT, padx=5)
+                  command=self.open_performance_dialog).pack(side=tk.LEFT, padx=5)
 
         # USD value refresh button
         self.usd_refresh_button = ttk.Button(control_frame, text="💲 Refresh USD",
@@ -462,125 +463,17 @@ class EnhancedWalletTab:
         # Focus on channel entry
         channel_entry.focus_set()
 
-    def show_performance_dialog(self):
-        """Show channel performance summary dialog."""
-        dialog = tk.Toplevel(self.parent_frame)
-        dialog.title("Channel Performance Summary")
-        dialog.geometry("1000x450")
-        dialog.transient(self.parent_frame)
-
-        # Header
-        header_label = ttk.Label(dialog, text="📊 Channel Performance Overview",
-                               font=('Arial', 12, 'bold'))
-        header_label.pack(pady=10)
-
-        # Performance tree
-        tree_frame = ttk.Frame(dialog)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        perf_tree = ttk.Treeview(tree_frame, show='headings')
-        perf_columns = ['Channel', 'Start Amount', 'Current Amount', 'P&L', 'P&L %', 'Total Trades', 'Status']
-        perf_tree['columns'] = perf_columns
-
-        column_widths = {'Channel': 120, 'Start Amount': 100, 'Current Amount': 100,
-                        'P&L': 80, 'P&L %': 80, 'Total Trades': 80, 'Status': 80}
-
-        for col in perf_columns:
-            perf_tree.heading(col, text=col)
-            perf_tree.column(col, width=column_widths.get(col, 80))
-
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=perf_tree.yview)
-        perf_tree.configure(yscrollcommand=scrollbar.set)
-
-        perf_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Get performance data
+    def open_performance_dialog(self):
+        """Open the performance summary dialog using the new dedicated class."""
+        if not self.db:
+            messagebox.showerror("Error", "Database connection not available.", parent=self.parent_frame)
+            return
         try:
-            if hasattr(self.db, 'get_all_channel_balances'):
-                # Get unique channels
-                self.db.cursor.execute("SELECT DISTINCT telegram_channel FROM wallet WHERE telegram_channel IS NOT NULL")
-                channels = [row[0] for row in self.db.cursor.fetchall()]
-
-                total_channels = 0
-                profitable_channels = 0
-
-                for channel in channels:
-                    # Skip template channels
-                    if self._is_template_channel(channel):
-                        continue
-
-                    # Get channel performance
-                    configs = self.db.get_channel_configs() if hasattr(self.db, 'get_channel_configs') else []
-                    start_amount = 1000.0
-                    start_currency = "USDT"
-
-                    for config in configs:
-                        if config.get('channel_name') == channel:
-                            start_amount = config.get('start_amount', 1000.0)
-                            start_currency = config.get('start_currency', 'USDT')
-                            break
-
-                    # Get current balance
-                    current_balances = self.db.get_channel_balance(channel) if hasattr(self.db, 'get_channel_balance') else {}
-                    current_amount = current_balances.get(start_currency, 0)
-
-                    # Calculate P&L
-                    pnl = current_amount - start_amount
-                    pnl_pct = (pnl / start_amount) * 100 if start_amount > 0 else 0
-
-                    # Get trade count
-                    self.db.cursor.execute("SELECT COUNT(*) FROM trades WHERE telegram_channel = ?", (channel,))
-                    trade_count = self.db.cursor.fetchone()[0]
-
-                    # Status
-                    if pnl > 0:
-                        status = "✅ Profit"
-                        profitable_channels += 1
-                    elif pnl < 0:
-                        status = "❌ Loss"
-                    else:
-                        status = "➖ Break-even"
-
-                    values = [
-                        channel,
-                        f"{start_amount:.2f} {start_currency}",
-                        f"{current_amount:.2f} {start_currency}",
-                        f"{pnl:+.2f} {start_currency}",
-                        f"{pnl_pct:+.1f}%",
-                        str(trade_count),
-                        status
-                    ]
-
-                    perf_tree.insert('', tk.END, values=values)
-                    total_channels += 1
-
-                # Summary at bottom
-                if total_channels == 0:
-                    perf_tree.insert('', tk.END, values=[
-                        'No channels found', 'Check .env config', '', '', '', '', '⚠️'
-                    ])
-
-                # Summary label
-                summary_text = f"📈 Summary: {profitable_channels}/{total_channels} channels profitable"
-                if total_channels > 0:
-                    profit_rate = (profitable_channels / total_channels) * 100
-                    summary_text += f" ({profit_rate:.1f}%)"
-
-            else:
-                perf_tree.insert('', tk.END, values=['Database not supported', '', '', '', '', '', '❌'])
-                summary_text = "❌ Performance tracking not available"
-
+            # Instantiate and show the new dialog
+            dialog = PerformanceDialog(self.parent_frame, self.db)
+            dialog.show()
         except Exception as e:
-            perf_tree.insert('', tk.END, values=[f'Error: {str(e)[:50]}...', '', '', '', '', '', '❌'])
-            summary_text = f"❌ Error loading performance data"
-
-        # Summary and close button
-        summary_label = ttk.Label(dialog, text=summary_text, font=('Arial', 10, 'bold'))
-        summary_label.pack(pady=5)
-
-        ttk.Button(dialog, text="Close", command=dialog.destroy).pack(pady=10)
+            messagebox.showerror("Error", f"Failed to open performance dialog: {e}", parent=self.parent_frame)
 
     def refresh_wallet_with_real_prices(self):
         """Refresh wallet with real USD prices while preserving the current filter."""
