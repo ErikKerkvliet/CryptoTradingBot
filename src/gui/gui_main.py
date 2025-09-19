@@ -27,10 +27,7 @@ try:
     from config.settings import settings
     settings.validate_required_fields()  # This will catch any missing required fields
 
-    if settings.DRY_RUN:
-        from src.dry_run.database import DryRunDatabase as TradingDatabase
-    else:
-        from src.database import TradingDatabase
+    from src.database import TradingDatabase
 
     SETTINGS_LOADED = True
     print(f"✅ Settings loaded successfully from {project_root}/.env")

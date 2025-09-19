@@ -1,10 +1,10 @@
 """Enhanced virtual wallet with channel-specific balance management."""
 from typing import Dict, Any
-from .database import DryRunDatabase
+from ..database import TradingDatabase
 
 
 class VirtualWallet:
-    def __init__(self, db: DryRunDatabase, default_balances: Dict[str, float] = None,
+    def __init__(self, db: TradingDatabase, default_balances: Dict[str, float] = None,
                  channel_configs: Dict[str, Dict[str, float]] = None):
         """
         Initialize the wallet with global and channel-specific configurations.

@@ -2,7 +2,7 @@
 from typing import Dict, Any, Optional
 import httpx
 from ..utils.exceptions import InsufficientBalanceError
-from .database import DryRunDatabase
+from ..database import TradingDatabase
 from .wallet import VirtualWallet
 
 
@@ -19,7 +19,7 @@ class DryRunTrader:
         self.trading_mode = trading_mode.upper()
         self.api_key = api_key
         self.api_secret = api_secret
-        self.db = DryRunDatabase()
+        self.db = TradingDatabase()
 
         # Initialize wallet with channel configurations
         self.wallet = VirtualWallet(self.db, channel_configs=channel_configs)
@@ -115,6 +115,33 @@ class DryRunTrader:
 
         # Default fallback
         return pair_upper[:-4] if pair_upper.endswith("USDT") else pair_upper[:-3], "USDT"
+
+    async def _record_wallet_snapshot(self, channel: str):
+        """Records the current total USD value of a channel's wallet."""
+        if not channel:
+            return
+
+        try:
+            balances = self.wallet.get_channel_balance(channel)
+            total_usd_value = 0.0
+
+            for currency, amount in balances.items():
+                if amount > 0:
+                    if currency.upper() in ["USDT", "USDC", "USD"]:
+                        total_usd_value += amount
+                    else:
+                        # Fetch price for non-stablecoins to get USD value
+                        # Assuming the quote is always USDT for price fetching
+                        pair = f"{currency.upper()}USDT"
+                        price = await self.get_market_price(pair)
+                        total_usd_value += amount * price
+
+            self.db.add_wallet_history_record(channel, total_usd_value)
+            print(f"📈 Recorded wallet snapshot for '{channel}': ${total_usd_value:.2f}")
+
+        except Exception as e:
+            print(f"⚠️  Could not record wallet snapshot for '{channel}': {e}")
+
 
     async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
@@ -212,6 +239,10 @@ class DryRunTrader:
             "leverage": leverage if self.trading_mode == "FUTURES" else 0,
         }
         self.db.add_trade(trade_data)
+
+        # Record wallet snapshot after the trade
+        if telegram_channel:
+            await self._record_wallet_snapshot(telegram_channel)
 
         return {"status": "simulated_open", **trade_data}
 

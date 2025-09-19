@@ -2,12 +2,15 @@
 import sqlite3
 from typing import Dict, Any, List, Optional
 import json
-from config.settings import BASE_DIR
+from config.settings import BASE_DIR, settings
 
 
 class TradingDatabase:
     """Enhanced database with channel-specific wallet management."""
-    def __init__(self, db_name: str = "live_trading.db"):
+    def __init__(self, db_name: str = None):
+        if not db_name:
+            db_name = f"{'dryrun' if settings.DRY_RUN else 'live'}_trading.db"
+
         self.db_path = BASE_DIR / db_name
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
@@ -78,7 +81,46 @@ class TradingDatabase:
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        # NEW: Wallet history table for performance tracking
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS wallet_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                channel_name TEXT NOT NULL,
+                total_value_usd REAL NOT NULL
+            )
+        """)
         self.conn.commit()
+
+    def reset_tables(self):
+        """
+        Clear all data from tables for a fresh dry-run session.
+        CRITICAL: This will only execute if DRY_RUN is enabled in settings.
+        """
+        if not settings.DRY_RUN:
+            print("❌ FATAL: reset_tables() called in LIVE mode. Aborting operation for safety.")
+            return
+
+        print("Resetting database for a new dry-run session...")
+        self.cursor.execute("DELETE FROM trades")
+        self.cursor.execute("DELETE FROM wallet")
+        self.cursor.execute("DELETE FROM llm_responses")
+        self.cursor.execute("DELETE FROM wallet_history")
+        # Note: channel_configs are preserved across sessions.
+        self.conn.commit()
+
+    def add_wallet_history_record(self, channel_name: str, total_value_usd: float):
+        """Adds a new wallet balance snapshot to the history table."""
+        try:
+            self.cursor.execute("""
+                INSERT INTO wallet_history (channel_name, total_value_usd)
+                VALUES (?, ?)
+            """, (channel_name, total_value_usd))
+            self.conn.commit()
+        except Exception as e:
+            print(f"❌ Error adding wallet history record: {e}")
+            self.conn.rollback()
 
     def initialize_channel_wallet(self, channel: str, currency: str = "USDT", amount: float = 1000.0):
         """Initialize a channel's wallet with starting balance."""
@@ -193,6 +235,14 @@ class TradingDatabase:
             WHERE telegram_channel IS NULL
         """)
         return {row[0]: row[1] for row in self.cursor.fetchall()}
+    
+    def update_balance(self, currency: str, new_balance: float):
+        """Update global balance for backwards compatibility."""
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO wallet (currency, balance, telegram_channel) 
+            VALUES (?, ?, NULL)
+        """, (currency, new_balance))
+        self.conn.commit()
 
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""

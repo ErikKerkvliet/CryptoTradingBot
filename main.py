@@ -19,11 +19,7 @@ from src.telegram_monitor import TelegramMonitor
 from src.signal_analyzer import SignalAnalyzer
 from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
-
-if settings.DRY_RUN:
-    from src.dry_run.database import DryRunDatabase as TradingDatabase
-else:
-    from src.database import TradingDatabase
+from src.database import TradingDatabase
 
 # Dynamic Imports Based on Trading Mode
 if settings.TRADING_MODE.upper() == "FUTURES":
