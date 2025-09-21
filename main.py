@@ -114,6 +114,73 @@ class TradingApp:
         )
         self.daily_trades = 0
 
+        if self.settings.DRY_RUN:
+            self._ensure_wallet_history_from_env()
+
+    def _ensure_wallet_history_from_env(self):
+        """
+        Ensure all channels from .env CHANNEL_WALLET_CONFIGS have initial wallet history.
+        """
+        try:
+            # Get channel configurations directly from settings
+            channel_configs = self.settings.channel_wallet_configurations
+
+            if not channel_configs:
+                self.logger.info("📊 No channel configurations found in .env")
+                return
+
+            self.logger.info("📊 Ensuring wallet history exists for all .env channels...")
+
+            for channel_name, config in channel_configs.items():
+                try:
+                    # Skip template channels
+                    if self._is_template_channel(channel_name):
+                        continue
+
+                    # Check if wallet history exists for this channel
+                    self.db.cursor.execute("""
+                            SELECT COUNT(*) FROM wallet_history 
+                            WHERE channel_name = ?
+                        """, (channel_name,))
+
+                    existing_count = self.db.cursor.fetchone()[0]
+
+                    if existing_count == 0:
+                        # Get the currency and amount for this channel
+                        for currency, amount in config.items():
+                            # Create initial wallet history entry
+                            initial_balances = {currency: amount}
+
+                            # Convert to USD equivalent (simplified)
+                            usd_value = amount if currency.upper() in ['USD', 'USDT', 'USDC'] else amount
+
+                            self.db.add_wallet_history_record(
+                                channel_name=channel_name,
+                                total_value_usd=usd_value,
+                                balances=initial_balances
+                            )
+
+                            self.logger.info(
+                                f"   ✅ Created initial wallet history for '{channel_name}': {amount} {currency}")
+                            break  # Only process first currency per channel
+                    else:
+                        self.logger.info(
+                            f"   ℹ️  Wallet history exists for '{channel_name}' ({existing_count} records)")
+
+                except Exception as e:
+                    self.logger.error(f"❌ Error initializing wallet history for '{channel_name}': {e}")
+
+        except Exception as e:
+            self.logger.error(f"❌ Error in wallet history initialization from .env: {e}")
+
+    def _is_template_channel(self, channel_name: str) -> bool:
+        """Check if a channel name looks like a template."""
+        if not channel_name or channel_name == 'global':
+            return False
+        template_patterns = ['test_channel', 'example', 'template', 'demo']
+        channel_lower = str(channel_name).lower()
+        return any(pattern in channel_lower for pattern in template_patterns)
+
     async def on_message(self, message: str, channel: str):
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")
 

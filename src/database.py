@@ -355,6 +355,67 @@ class TradingDatabase:
         ))
         self.conn.commit()
 
+    def initialize_startup_wallet_history(self):
+        """
+        Initialize wallet history entries for all channels during application startup.
+        This creates initial snapshots based on the starting balances from channel configs.
+        """
+        try:
+            # Get all channel configurations
+            configs = self.get_channel_configs()
+
+            if not configs:
+                print("📊 No channel configurations found for wallet history initialization")
+                return
+
+            print("📊 Initializing startup wallet history for all channels...")
+
+            for config in configs:
+                channel_name = config['channel_name']
+                start_currency = config['start_currency']
+                start_amount = config['start_amount']
+
+                # Skip template channels
+                if self._is_template_channel(channel_name):
+                    continue
+
+                # Check if this channel already has wallet history
+                self.cursor.execute("""
+                    SELECT COUNT(*) FROM wallet_history 
+                    WHERE channel_name = ?
+                """, (channel_name,))
+
+                existing_count = self.cursor.fetchone()[0]
+
+                # Only create initial entry if no history exists
+                if existing_count == 0:
+                    # Create initial balances dictionary
+                    initial_balances = {start_currency: start_amount}
+
+                    # Add the initial wallet history record
+                    self.add_wallet_history_record(
+                        channel_name=channel_name,
+                        total_value_usd=start_amount,  # Assuming start currency is USD-equivalent
+                        balances=initial_balances
+                    )
+
+                    print(f"   ✅ Created initial wallet history for '{channel_name}': {start_amount} {start_currency}")
+                else:
+                    print(f"   ℹ️  Wallet history already exists for '{channel_name}' ({existing_count} records)")
+
+            print("📊 Startup wallet history initialization completed")
+
+        except Exception as e:
+            print(f"❌ Error initializing startup wallet history: {e}")
+
+    def _is_template_channel(self, channel_name: str) -> bool:
+        """Check if a channel name looks like a template."""
+        if not channel_name or channel_name == 'global':
+            return False
+        template_patterns = ['test_channel', 'example', 'template', 'demo']
+        channel_lower = str(channel_name).lower()
+        return any(pattern in channel_lower for pattern in template_patterns)
+
     def get_trades(self) -> List[Dict[str, Any]]:
         """Retrieve all trades from the database."""
         self.cursor.execute("SELECT * FROM trades ORDER BY timestamp DESC")

@@ -26,7 +26,8 @@ class VirtualWallet:
     def reset(self):
         """
         Reset the wallet to its default state.
-        This initializes both global balances and channel-specific balances.
+        This initializes both global balances and channel-specific balances,
+        and creates initial wallet history entries.
         """
         # Clear all existing data
         self.db.reset_tables()
@@ -51,6 +52,9 @@ class VirtualWallet:
 
             for channel in default_channels:
                 self.db.initialize_channel_wallet(channel, "USDT", 1000.0)
+
+        # NEW: Initialize wallet history for all channels
+        self.db.initialize_startup_wallet_history()
 
     def get_balance(self) -> Dict[str, float]:
         """Get global balance (for backwards compatibility)."""
