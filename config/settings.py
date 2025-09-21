@@ -42,7 +42,10 @@ class Settings(BaseSettings):
     # -- Futures-Specific Settings --
     DEFAULT_LEVERAGE: int = 10
 
-    # -- NEW: Channel-Specific Configurations --
+    # -- Auto Sell Monitor Configuration --
+    AUTO_SELL_MONITOR: bool = False
+
+    # -- Channel-Specific Configurations --
     # Format: "channel1:USDT:1000,channel2:USDT:2000,channel3:BTC:0.1"
     CHANNEL_WALLET_CONFIGS: Optional[str] = None
 
@@ -240,11 +243,22 @@ class Settings(BaseSettings):
         else:
             print("📊 No custom channel configurations found, using defaults")
 
+    def print_auto_sell_configuration(self):
+        """Print auto sell monitor configuration."""
+        print(f"🤖 Auto Sell Monitor: {'ENABLED' if self.AUTO_SELL_MONITOR else 'DISABLED'}")
+        if self.AUTO_SELL_MONITOR:
+            print("   📊 Will automatically monitor open trades every 5 minutes")
+            print("   💰 Will use SellDecisionManager for intelligent sell decisions")
+            print("   ⚡ Will automatically close profitable trades")
+        else:
+            print("   📱 Will use current behavior (manual sells from Telegram signals)")
+
 # Create a single, global instance of the settings
 # This will validate the .env file exists and load only from there
 try:
     settings = Settings()
     print("✅ Settings loaded successfully from .env file")
+    settings.print_auto_sell_configuration()  # Show auto sell status
 except Exception as e:
     print(f"❌ Failed to load settings: {e}")
     raise

@@ -1,4 +1,4 @@
-"""Enhanced dry run trader with channel-specific balance management."""
+"""Enhanced dry run trader with improved spot and futures support for auto-sell monitor."""
 from typing import Dict, Any, Optional
 import httpx
 from ..utils.exceptions import InsufficientBalanceError
@@ -8,8 +8,8 @@ from .wallet import VirtualWallet
 
 class DryRunTrader:
     """
-    Enhanced simulated trader that manages channel-specific wallets.
-    Each channel has its own isolated balance and can only trade with its own funds.
+    Enhanced simulated trader that manages channel-specific wallets with improved
+    spot and futures support for the auto-sell monitor.
     """
 
     def __init__(self, exchange: str = "KRAKEN", trading_mode: str = "SPOT",
@@ -41,8 +41,12 @@ class DryRunTrader:
     async def get_market_price(self, pair: str) -> float:
         """Get the current market price from the configured exchange and mode."""
         if self.trading_mode == "FUTURES":
-            # Currently, only MEXC is supported for futures dry-run prices
-            return await self._get_mexc_futures_market_price(pair)
+            # For futures, determine the correct API endpoint and format
+            if self.exchange == "MEXC":
+                return await self._get_mexc_futures_market_price(pair)
+            else:
+                print(f"Unsupported exchange for futures market data: {self.exchange}")
+                return 1.0
 
         # Spot mode
         if self.exchange == "KRAKEN":
@@ -56,8 +60,10 @@ class DryRunTrader:
     async def _get_kraken_market_price(self, pair: str) -> float:
         """Get the current market price from Kraken Spot."""
         try:
+            # Handle different pair formats
+            kraken_pair = pair.replace("/", "").replace("_", "")
             url = "https://api.kraken.com/0/public/Ticker"
-            params = {"pair": pair.replace("/", "")}
+            params = {"pair": kraken_pair}
             response = await self._client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
@@ -72,21 +78,29 @@ class DryRunTrader:
     async def _get_mexc_market_price(self, pair: str) -> float:
         """Get the current market price from MEXC Spot."""
         try:
+            # Convert pair format for MEXC spot (BTC/USDT -> BTCUSDT)
+            mexc_pair = pair.replace("/", "").replace("_", "")
             url = "https://api.mexc.com/api/v3/ticker/price"
-            params = {"symbol": pair.replace("/", "")}
+            params = {"symbol": mexc_pair}
             response = await self._client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             return float(data["price"])
         except Exception as e:
-            print(f"Error fetching MEXC market price for {pair}: {e}")
+            print(f"Error fetching MEXC spot market price for {pair}: {e}")
             return 1.0
 
     async def _get_mexc_futures_market_price(self, pair: str) -> float:
         """Get the current market price for a futures contract from MEXC."""
         try:
+            # Convert pair format for MEXC futures (BTC/USDT -> BTC_USDT)
+            mexc_futures_pair = pair.replace("/", "_")
+            if "_" not in mexc_futures_pair and "/" not in pair:
+                # Handle BTCUSDT -> BTC_USDT conversion
+                mexc_futures_pair = self._convert_spot_to_futures_pair(pair)
+
             url = "https://contract.mexc.com/api/v1/contract/ticker"
-            params = {"symbol": pair}
+            params = {"symbol": mexc_futures_pair}
             response = await self._client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
@@ -96,6 +110,22 @@ class DryRunTrader:
         except Exception as e:
             print(f"Error fetching MEXC Futures market price for {pair}: {e}")
             return 1.0
+
+    def _convert_spot_to_futures_pair(self, spot_pair: str) -> str:
+        """Convert spot pair format to futures pair format."""
+        # Common quote currencies for futures
+        quote_currencies = ["USDT", "USDC", "BTC", "ETH"]
+
+        for quote in quote_currencies:
+            if spot_pair.endswith(quote):
+                base = spot_pair[:-len(quote)]
+                return f"{base}_{quote}"
+
+        # Default assumption - pair ends with USDT
+        if len(spot_pair) > 4:
+            return f"{spot_pair[:-4]}_USDT"
+
+        return spot_pair
 
     def _split_pair(self, pair: str) -> tuple[str, str]:
         """Splits a trading pair string into base and quote currencies."""
@@ -116,6 +146,29 @@ class DryRunTrader:
         # Default fallback
         return pair_upper[:-4] if pair_upper.endswith("USDT") else pair_upper[:-3], "USDT"
 
+    def _normalize_pair_format(self, pair: str) -> str:
+        """Normalize pair format for internal storage and API calls."""
+        if self.trading_mode == "FUTURES":
+            # Futures pairs should use underscore format (BTC_USDT)
+            if "/" in pair:
+                return pair.replace("/", "_")
+            elif "_" not in pair:
+                # Convert BTCUSDT to BTC_USDT
+                return self._convert_spot_to_futures_pair(pair)
+            return pair
+        else:
+            # Spot pairs - remove separators for MEXC, keep / for Kraken
+            if self.exchange == "MEXC":
+                return pair.replace("/", "").replace("_", "")
+            else:  # Kraken
+                if "_" in pair:
+                    return pair.replace("_", "/")
+                elif "/" not in pair:
+                    # Convert BTCUSDT to BTC/USDT for Kraken
+                    base, quote = self._split_pair(pair)
+                    return f"{base}/{quote}"
+                return pair
+
     async def _record_wallet_snapshot(self, channel: str):
         """Records the current total USD value and full balance snapshot of a channel's wallet."""
         if not channel:
@@ -131,8 +184,12 @@ class DryRunTrader:
                         total_usd_value += amount
                     else:
                         # Fetch price for non-stablecoins to get USD value
-                        # Assuming the quote is always USDT for price fetching
-                        pair_for_price = f"{currency.upper()}USDT"
+                        # Create appropriate pair format for price fetching
+                        if self.trading_mode == "FUTURES":
+                            pair_for_price = f"{currency.upper()}_USDT"
+                        else:
+                            pair_for_price = f"{currency.upper()}USDT"
+
                         price = await self.get_market_price(pair_for_price)
                         total_usd_value += amount * price
 
@@ -143,18 +200,20 @@ class DryRunTrader:
         except Exception as e:
             print(f"⚠️  Could not record wallet snapshot for '{channel}': {e}")
 
-
     async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
                           take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
-                          take_profit_target: Optional[int] = None, leverage: int = 0) -> Dict[str, Any]:
+                          take_profit_target: Optional[int] = None, leverage: int = 0,
+                          **kwargs) -> Dict[str, Any]:
         """
-        Simulate placing an order with channel-specific balance management.
-        Each channel can only use its own isolated funds.
+        Simulate placing an order with enhanced spot/futures support.
         """
         # Auto-initialize channel wallet if it doesn't exist
         if telegram_channel:
             self.wallet.initialize_channel_if_needed(telegram_channel)
+
+        # Normalize pair format for API calls
+        normalized_pair = self._normalize_pair_format(pair)
 
         # Get the appropriate balance (channel-specific or global)
         if telegram_channel:
@@ -164,17 +223,19 @@ class DryRunTrader:
             balances = self.wallet.get_balance()
             balance_source = "global wallet"
 
-        base_currency, quote_currency = self._split_pair(pair)
+        base_currency, quote_currency = self._split_pair(normalized_pair)
 
         if ordertype == "market" and price is None:
-            price = await self.get_market_price(pair)
+            price = await self.get_market_price(normalized_pair)
 
         cost = volume * (price or 0)
 
+        # Apply leverage for futures trading
         if self.trading_mode == "FUTURES":
             # In futures, the cost is the margin, which is affected by leverage
             leverage_used = leverage if leverage > 0 else 1
             cost /= leverage_used
+            print(f"💰 Futures trade with {leverage_used}x leverage - Margin required: {cost:.2f} {quote_currency}")
 
         print(f"💰 Using {balance_source} - Available balances: {balances}")
 
@@ -197,30 +258,8 @@ class DryRunTrader:
                 self.wallet.update_balance(quote_currency, new_quote_balance)
                 self.wallet.update_balance(base_currency, new_base_balance)
 
-            print(f"✅ BUY executed: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
-            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
-            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
-
-        else:  # Sell
-            available_base = balances.get(base_currency, 0)
-            if available_base < volume:
-                raise InsufficientBalanceError(
-                    f"Insufficient {base_currency} in {balance_source} to sell. "
-                    f"Need {volume}, have {available_base}"
-                )
-
-            # Update balances
-            new_base_balance = available_base - volume
-            new_quote_balance = balances.get(quote_currency, 0) + cost
-
-            if telegram_channel:
-                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
-                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
-            else:
-                self.wallet.update_balance(base_currency, new_base_balance)
-                self.wallet.update_balance(quote_currency, new_quote_balance)
-
-            print(f"✅ SELL executed: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
+            mode_info = f" ({self.trading_mode})" if self.trading_mode == "FUTURES" else ""
+            print(f"✅ SELL executed{mode_info}: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
             print(f"   New {base_currency} balance: {new_base_balance:.8f}")
             print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
 
@@ -269,5 +308,8 @@ class DryRunTrader:
 
     async def close(self):
         """Close the database and client connections."""
-        self.db.close()
-        await self._client.aclose()
+        try:
+            if hasattr(self.db, 'close'):
+                self.db.close()
+        except Exception as e:
+            print(f"Warning: Error closing database connection: {e}")

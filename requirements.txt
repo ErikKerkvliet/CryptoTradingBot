@@ -21,3 +21,5 @@ pytest-asyncio==0.22.0
 # Data validation and settings management - Updated to latest stable
 pydantic==2.11.9
 pydantic-settings==2.6.1
+
+matplotlib

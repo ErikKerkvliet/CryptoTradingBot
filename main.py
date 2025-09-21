@@ -1,4 +1,4 @@
-"""Updated main trading application with channel-specific balance management."""
+"""Updated main trading application with conditional auto-sell monitor support."""
 import asyncio
 import sys
 import os
@@ -20,6 +20,20 @@ from src.signal_analyzer import SignalAnalyzer
 from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
 from src.database import TradingDatabase
+
+# Conditional imports for auto-sell monitor
+if settings.AUTO_SELL_MONITOR:
+    try:
+        from src.auto_sell_monitor import AutoSellMonitor
+        from src.sell_decision_manager import SellDecisionManager, SellDecision
+        AUTO_SELL_AVAILABLE = True
+        print("🤖 Auto Sell Monitor classes loaded successfully")
+    except ImportError as e:
+        print(f"⚠️ Auto Sell Monitor enabled but classes not available: {e}")
+        print("   Falling back to manual sell logic")
+        AUTO_SELL_AVAILABLE = False
+else:
+    AUTO_SELL_AVAILABLE = False
 
 # Dynamic Imports Based on Trading Mode
 if settings.TRADING_MODE.upper() == "FUTURES":
@@ -44,6 +58,7 @@ class TradingApp:
         self.analyzer = SignalAnalyzer()
         self.db = TradingDatabase()
         self.trader = None
+        self.auto_sell_monitor = None  # Will be initialized if enabled
 
         # Directly use the channel configurations from the settings file.
         # This correctly loads and respects the CHANNEL_WALLET_CONFIGS from your .env file.
@@ -78,6 +93,18 @@ class TradingApp:
                 api_key = self.settings.KRAKEN_API_KEY if self.settings.EXCHANGE.upper() == "KRAKEN" else self.settings.MEXC_API_KEY
                 api_secret = self.settings.KRAKEN_API_SECRET if self.settings.EXCHANGE.upper() == "KRAKEN" else self.settings.MEXC_API_SECRET
                 self.trader = LiveTrader(api_key, api_secret, self.db)
+
+        # Initialize Auto Sell Monitor if enabled
+        if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE:
+            self.auto_sell_monitor = AutoSellMonitor(
+                db=self.db,
+                trader=self.trader,
+                settings=self.settings,
+                logger=self.logger
+            )
+            self.logger.info("🤖 Auto Sell Monitor initialized and ready")
+        elif self.settings.AUTO_SELL_MONITOR and not AUTO_SELL_AVAILABLE:
+            self.logger.warning("⚠️ Auto Sell Monitor requested but not available - using manual sell logic")
 
         self.telegram = TelegramMonitor(
             settings.TELEGRAM_API_ID,
@@ -160,80 +187,25 @@ class TradingApp:
             volume = 0.0
 
             if side == "buy":
-                quote_balance = balances.get(quote, 0.0)
-                order_value = 0.0
-
-                if self.settings.ORDER_SIZE_USD > 0:
-                    order_value = self.settings.ORDER_SIZE_USD
-                    self.logger.info(f"Using fixed order size from settings: {order_value} {quote}")
-                else:
-                    max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
-                    order_value = quote_balance * max_pct
-                    self.logger.info(f"Calculating order size based on {self.settings.MAX_POSITION_SIZE_PERCENT}% of {quote} balance in {balance_source}.")
-
-                if order_value <= 0:
-                    self.logger.warning(f"Calculated order value is {order_value:.2f}. Must be positive. Skipping.")
+                volume = await self._calculate_buy_volume(parsed, balances, quote, validated_pair_str)
+                if volume <= 0:
                     return
-
-                entry = parsed.get("entry_price")
-                if entry is None and parsed.get("entry_price_range"):
-                    entry = sum(parsed.get("entry_price_range")) / 2.0
-
-                if entry is None:
-                    market_price = await self.trader.get_market_price(validated_pair_str)
-                    volume = order_value / max(1e-8, market_price)
-                else:
-                    volume = order_value / max(1e-8, entry)
 
             else:  # side == "sell"
-                # Check for last buy trade from the same channel
-                last_buy_trade = self.db.get_last_buy_trade(channel, base, quote)
-
-                if not last_buy_trade:
-                    self.logger.warning(f"No previous BUY trade found for {base}/{quote} from channel '{channel}'. Skipping SELL order.")
-                    return
-
-                # Get current market price for profit check
-                current_market_price = await self.trader.get_market_price(validated_pair_str)
-                buy_price = last_buy_trade['price']
-
-                # Profit check
-                if buy_price and current_market_price:
-                    profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
-
-                    if current_market_price <= buy_price:
-                        self.logger.warning(f"🚫 SELL BLOCKED - Would result in loss!")
-                        self.logger.warning(f"   Buy price: {buy_price:.8f} {quote}")
-                        self.logger.warning(f"   Current price: {current_market_price:.8f} {quote}")
-                        self.logger.warning(f"   Loss would be: {profit_percentage:.2f}%")
-                        self.logger.warning(f"   Skipping SELL order to prevent loss.")
+                # Handle sell logic based on AUTO_SELL_MONITOR setting
+                if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE:
+                    # When auto-sell monitor is enabled, we generally skip manual sells
+                    # unless it's a forced sell or the auto monitor decides it's appropriate
+                    sell_result = await self._handle_auto_monitored_sell(parsed, channel, base, quote, validated_pair_str, balances)
+                    if not sell_result:
                         return
-                    else:
-                        self.logger.info(f"✅ PROFIT CHECK PASSED")
-                        self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
-                        self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
-                        self.logger.info(f"   Profit: {profit_percentage:.2f}%")
+                    volume = sell_result
                 else:
-                    self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
-                    self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
-                    return
-
-                # Use the volume from the last buy trade
-                volume = last_buy_trade['volume']
-                base_balance = balances.get(base, 0.0)
-
-                self.logger.info(f"Found last BUY trade from '{channel}' for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
-
-                # Check if we have enough balance to sell
-                if base_balance < volume:
-                    self.logger.warning(f"Insufficient {base} balance to sell {volume:.8f}. Available: {base_balance:.8f}. Will sell available amount.")
-                    volume = base_balance
-
-                if volume <= 0:
-                    self.logger.warning(f"No {base} available to sell. Skipping.")
-                    return
-
-                self.logger.info(f"Setting SELL order volume to match last BUY from '{channel}': {volume:.8f} {base}")
+                    # Use current manual sell logic
+                    sell_result = await self._handle_manual_sell(parsed, channel, base, quote, validated_pair_str, balances)
+                    if not sell_result:
+                        return
+                    volume = sell_result
 
             entry = parsed.get("entry_price")
             if entry is None and parsed.get("entry_price_range"):
@@ -287,10 +259,168 @@ class TradingApp:
         except Exception as e:
             self.logger.exception(f"Order failed: {e}")
 
+    async def _calculate_buy_volume(self, parsed, balances, quote, validated_pair_str):
+        """Calculate volume for buy orders."""
+        quote_balance = balances.get(quote, 0.0)
+        order_value = 0.0
+
+        if self.settings.ORDER_SIZE_USD > 0:
+            order_value = self.settings.ORDER_SIZE_USD
+            self.logger.info(f"Using fixed order size from settings: {order_value} {quote}")
+        else:
+            max_pct = self.settings.MAX_POSITION_SIZE_PERCENT / 100.0
+            order_value = quote_balance * max_pct
+            self.logger.info(f"Calculating order size based on {self.settings.MAX_POSITION_SIZE_PERCENT}% of {quote} balance.")
+
+        if order_value <= 0:
+            self.logger.warning(f"Calculated order value is {order_value:.2f}. Must be positive. Skipping.")
+            return 0
+
+        entry = parsed.get("entry_price")
+        if entry is None and parsed.get("entry_price_range"):
+            entry = sum(parsed.get("entry_price_range")) / 2.0
+
+        if entry is None:
+            market_price = await self.trader.get_market_price(validated_pair_str)
+            volume = order_value / max(1e-8, market_price)
+        else:
+            volume = order_value / max(1e-8, entry)
+
+        return volume
+
+    async def _handle_auto_monitored_sell(self, parsed, channel, base, quote, validated_pair_str, balances):
+        """Handle sell when auto-sell monitor is enabled."""
+        # Check for last buy trade from the same channel
+        last_buy_trade = self.db.get_last_buy_trade(channel, base, quote)
+
+        if not last_buy_trade:
+            self.logger.info(f"🤖 AUTO-SELL MODE: No previous BUY trade found for {base}/{quote} from channel '{channel}'.")
+            self.logger.info(f"   ℹ️ Auto-sell monitor will handle this pair automatically when trades are opened.")
+            return None
+
+        # Get current market price for analysis
+        current_market_price = await self.trader.get_market_price(validated_pair_str)
+        buy_price = last_buy_trade['price']
+
+        # Use SellDecisionManager to decide if manual sell should proceed
+        if hasattr(self, 'auto_sell_monitor') and self.auto_sell_monitor:
+            try:
+                # Prepare signal data for decision
+                signal_data = {
+                    'action': 'SELL',
+                    'base_currency': base,
+                    'quote_currency': quote,
+                    'confidence': parsed.get('confidence', 85),
+                    'take_profit_targets': parsed.get('take_profit_targets', []),
+                    'stop_loss': parsed.get('stop_loss')
+                }
+
+                # Get sell decision from SellDecisionManager
+                decision, reasons, additional_data = await self.auto_sell_monitor.sell_manager.should_sell(
+                    signal_data=signal_data,
+                    last_buy_trade=last_buy_trade,
+                    current_price=current_market_price
+                )
+
+                # Log the decision
+                summary = self.auto_sell_monitor.sell_manager.get_decision_summary(decision, reasons, additional_data)
+                self.logger.info(f"🤖 AUTO-SELL DECISION for manual sell signal: {summary}")
+
+                if decision == SellDecision.BLOCK:
+                    self.logger.info("🚫 Manual sell blocked by SellDecisionManager - auto-monitor will handle this trade")
+                    return None
+                elif decision in [SellDecision.SELL, SellDecision.PARTIAL_SELL]:
+                    # Calculate sell volume using decision manager
+                    volume = await self.auto_sell_monitor.sell_manager.get_sell_volume(
+                        decision, last_buy_trade['volume'], additional_data
+                    )
+                    self.logger.info(f"✅ Manual sell approved by SellDecisionManager: {volume:.8f} {base}")
+                    return volume
+                else:
+                    self.logger.info("⏳ SellDecisionManager suggests HOLD - deferring to auto-monitor")
+                    return None
+
+            except Exception as e:
+                self.logger.error(f"❌ Error in SellDecisionManager analysis: {e}")
+                # Fall back to simple profit check
+                return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+        else:
+            # Auto-sell monitor not available, use simple profit check
+            return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+
+    async def _handle_manual_sell(self, parsed, channel, base, quote, validated_pair_str, balances):
+        """Handle sell using current manual logic (when auto-sell monitor is disabled)."""
+        # Check for last buy trade from the same channel
+        last_buy_trade = self.db.get_last_buy_trade(channel, base, quote)
+
+        if not last_buy_trade:
+            self.logger.warning(f"No previous BUY trade found for {base}/{quote} from channel '{channel}'. Skipping SELL order.")
+            return None
+
+        # Get current market price for profit check
+        current_market_price = await self.trader.get_market_price(validated_pair_str)
+
+        return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+
+    async def _simple_profit_check(self, last_buy_trade, current_market_price, base, quote):
+        """Perform the current simple profit check logic."""
+        buy_price = last_buy_trade['price']
+
+        # Profit check
+        if buy_price and current_market_price:
+            profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
+
+            if current_market_price <= buy_price:
+                self.logger.warning(f"🚫 SELL BLOCKED - Would result in loss!")
+                self.logger.warning(f"   Buy price: {buy_price:.8f} {quote}")
+                self.logger.warning(f"   Current price: {current_market_price:.8f} {quote}")
+                self.logger.warning(f"   Loss would be: {profit_percentage:.2f}%")
+                self.logger.warning(f"   Skipping SELL order to prevent loss.")
+                return None
+            else:
+                self.logger.info(f"✅ PROFIT CHECK PASSED")
+                self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
+                self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
+                self.logger.info(f"   Profit: {profit_percentage:.2f}%")
+        else:
+            self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
+            self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
+            return None
+
+        # Use the volume from the last buy trade
+        volume = last_buy_trade['volume']
+        base_balance = self.trader.get_balance().get(base, 0.0) if hasattr(self.trader, 'get_balance') else 0.0
+
+        self.logger.info(f"Found last BUY trade for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
+
+        # Check if we have enough balance to sell
+        if base_balance < volume:
+            self.logger.warning(f"Insufficient {base} balance to sell {volume:.8f}. Available: {base_balance:.8f}. Will sell available amount.")
+            volume = base_balance
+
+        if volume <= 0:
+            self.logger.warning(f"No {base} available to sell. Skipping.")
+            return None
+
+        self.logger.info(f"Setting SELL order volume to match last BUY: {volume:.8f} {base}")
+        return volume
+
     async def run(self):
         self.logger.info("Starting trading application...")
         self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}")
         self.logger.info(f"Channels={self.settings.target_channels}, Max daily BUY trades={self.settings.MAX_DAILY_TRADES}")
+
+        # Log auto-sell monitor status
+        if self.settings.AUTO_SELL_MONITOR:
+            if AUTO_SELL_AVAILABLE and self.auto_sell_monitor:
+                self.logger.info(f"🤖 Auto Sell Monitor: ENABLED")
+                self.logger.info(f"   📊 Will monitor open trades every 5 minutes")
+                self.logger.info(f"   💰 Manual sells will be filtered through SellDecisionManager")
+            else:
+                self.logger.warning(f"⚠️ Auto Sell Monitor: REQUESTED but NOT AVAILABLE")
+                self.logger.info(f"   📱 Using current manual sell logic as fallback")
+        else:
+            self.logger.info(f"📱 Auto Sell Monitor: DISABLED - using current manual sell logic")
 
         if self.settings.DRY_RUN:
             self.logger.info(f"💰 Channel-specific wallets initialized with configurations:")
@@ -309,10 +439,26 @@ class TradingApp:
                 self.logger.error("   Please check your API keys and network connection. Exiting.")
                 return
 
+        # Start auto-sell monitor if enabled and available
+        auto_sell_task = None
+        if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE and self.auto_sell_monitor:
+            self.logger.info("🚀 Starting Auto Sell Monitor in background...")
+            auto_sell_task = asyncio.create_task(self.auto_sell_monitor.start_monitoring())
+
         try:
             await self.telegram.start(self.on_message)
         except Exception as e:
             self.logger.exception(f"Error starting telegram monitor: {e}")
+        finally:
+            # Stop auto-sell monitor if it was started
+            if auto_sell_task and self.auto_sell_monitor:
+                self.logger.info("🛑 Stopping Auto Sell Monitor...")
+                await self.auto_sell_monitor.stop_monitoring()
+                auto_sell_task.cancel()
+                try:
+                    await auto_sell_task
+                except asyncio.CancelledError:
+                    pass
 
 
 if __name__ == "__main__":

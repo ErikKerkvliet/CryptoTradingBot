@@ -1,11 +1,19 @@
 """Enhanced GUI wallet tab with channel-specific wallet support."""
 import tkinter as tk
+import sys
 from tkinter import ttk, messagebox
 from typing import Dict, Any, List
 import threading
 from collections import defaultdict
 from .performance_dialog import PerformanceDialog
 
+try:
+    from config.settings import settings
+    settings.validate_required_fields()
+except Exception as e:
+    print(f"❌ Configuration error: {e}")
+    print("Please check your .env file and ensure all required variables are set.")
+    sys.exit(1)
 
 class EnhancedWalletTab:
     """Enhanced wallet tab with channel filtering and management."""
@@ -490,10 +498,10 @@ class EnhancedWalletTab:
                 wallet_data = []
                 try:
                     import sqlite3
-                    from config.settings import BASE_DIR
+                    from config.settings import BASE_DIR, settings
 
                     # Determine database path
-                    if hasattr(self.db, '__class__') and 'DryRun' in self.db.__class__.__name__:
+                    if settings.DRY_RUN:
                         db_path = BASE_DIR / "dry_run.db"
                     else:
                         db_path = BASE_DIR / "live_trading.db"
@@ -625,7 +633,114 @@ class EnhancedWalletTab:
             return None
 
     def _fetch_crypto_prices_sync(self, symbols):
-        """Fetch crypto prices synchronously."""
+        """Fetch crypto prices synchronously from the configured exchange."""
+        try:
+            import requests
+            from config.settings import settings
+
+            # Use the configured exchange
+            exchange = getattr(settings, 'EXCHANGE', 'MEXC').upper()
+
+            if exchange == 'MEXC':
+                return self._fetch_mexc_prices_sync(symbols)
+            elif exchange == 'KRAKEN':
+                return self._fetch_kraken_prices_sync(symbols)
+            else:
+                # Fallback to CoinGecko for unsupported exchanges
+                return self._fetch_coingecko_prices_sync(symbols)
+
+        except Exception as e:
+            print(f"Error fetching prices: {e}")
+            return {}
+
+    def _fetch_mexc_prices_sync(self, symbols):
+        """Fetch prices from MEXC API."""
+        try:
+            import requests
+
+            # MEXC spot price endpoint
+            url = "https://api.mexc.com/api/v3/ticker/24hr"
+
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            prices = {}
+
+            # Convert symbols to MEXC format (remove common separators)
+            mexc_symbols = []
+            for symbol in symbols:
+                mexc_symbol = symbol.upper().replace('/', '').replace('_', '') + 'USDT'
+                mexc_symbols.append((symbol, mexc_symbol))
+
+            # Process MEXC response
+            for item in data:
+                symbol = item.get('symbol', '')
+                price = float(item.get('lastPrice', 0))
+
+                # Match with requested symbols
+                for original_symbol, mexc_symbol in mexc_symbols:
+                    if symbol == mexc_symbol and price > 0:
+                        prices[original_symbol] = price
+                        break
+
+            return prices
+
+        except Exception as e:
+            print(f"Error fetching MEXC prices: {e}")
+            return {}
+
+    def _fetch_kraken_prices_sync(self, symbols):
+        """Fetch prices from Kraken API."""
+        try:
+            import requests
+
+            prices = {}
+
+            # Kraken symbol mapping
+            kraken_mapping = {
+                'BTC': 'XBTUSD', 'ETH': 'ETHUSD', 'ADA': 'ADAUSD',
+                'XRP': 'XRPUSD', 'LTC': 'LTCUSD', 'DOT': 'DOTUSD'
+            }
+
+            # Get symbols that Kraken supports
+            kraken_symbols = []
+            for symbol in symbols:
+                symbol_upper = symbol.upper()
+                if symbol_upper in kraken_mapping:
+                    kraken_symbols.append(kraken_mapping[symbol_upper])
+
+            if not kraken_symbols:
+                return {}
+
+            # Kraken ticker endpoint
+            url = "https://api.kraken.com/0/public/Ticker"
+            params = {"pair": ",".join(kraken_symbols)}
+
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("result"):
+                # Reverse mapping for results
+                reverse_mapping = {v: k for k, v in kraken_mapping.items()}
+
+                for kraken_pair, price_data in data["result"].items():
+                    # Find original symbol
+                    for original_pair, mapped_pair in kraken_mapping.items():
+                        if kraken_pair.startswith(mapped_pair.replace('USD', '')):
+                            original_symbol = original_pair
+                            prices[original_symbol] = float(price_data["c"][0])
+                            break
+
+            return prices
+
+        except Exception as e:
+            print(f"Error fetching Kraken prices: {e}")
+            return {}
+
+    def _fetch_coingecko_prices_sync(self, symbols):
+        """Fetch prices from CoinGecko API (fallback)."""
         try:
             import requests
 
@@ -655,7 +770,7 @@ class EnhancedWalletTab:
             return prices
 
         except Exception as e:
-            print(f"Error fetching prices: {e}")
+            print(f"Error fetching CoinGecko prices: {e}")
             return {}
 
     def _get_real_usd_price(self, currency, crypto_prices):
@@ -715,7 +830,7 @@ class EnhancedWalletTab:
                 self.total_value_label.config(text=label_text)
 
             # This block will now run for ALL successful filters
-            status_text = f"✅ Updated {updated_count} prices from CoinGecko"
+            status_text = f"✅ Updated {updated_count} prices from {settings.EXCHANGE}"
             self.usd_status_label.config(text=status_text, foreground="green")
 
         except Exception as e:

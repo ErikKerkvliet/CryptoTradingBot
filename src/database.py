@@ -9,7 +9,7 @@ class TradingDatabase:
     """Enhanced database with channel-specific wallet management."""
     def __init__(self, db_name: str = None):
         if not db_name:
-            db_name = f"{'dry' if settings.DRY_RUN else 'live'}_trading.db"
+            db_name = f"{'dry_run' if settings.DRY_RUN else 'live_trading'}.db"
 
         self.db_path = BASE_DIR / db_name
         self.conn = sqlite3.connect(self.db_path)
