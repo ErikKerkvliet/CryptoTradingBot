@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     AUTO_SELL_MONITOR: bool = False
 
     # -- Channel-Specific Configurations --
-    # Format: "channel1:USDT:1000,channel2:USDT:2000,channel3:BTC:0.1"
+    # Format: "channel1:USDT:1000&BTC:0.1,channel2:USDT:2000"
     CHANNEL_WALLET_CONFIGS: Optional[str] = None
 
     class Config:
@@ -128,6 +128,10 @@ class Settings(BaseSettings):
         Parse channel wallet configurations from the environment variable.
         This ensures all target channels have a default configuration, which is
         then overridden by specific settings in CHANNEL_WALLET_CONFIGS.
+
+        Format: "channel1:USDT:1000&BTC:0.1,channel2:USDT:2000"
+        - Channels are separated by commas (,).
+        - Currencies within a channel are separated by ampersands (&).
         """
         # 1. Start with default wallets for ALL target channels.
         configs: Dict[str, Dict[str, float]] = {}
@@ -148,20 +152,30 @@ class Settings(BaseSettings):
                 for config_str in channel_configs_str:
                     config_str = config_str.strip()
                     if ':' in config_str:
-                        parts = config_str.split(':')
-                        if len(parts) == 3:
+                        parts = config_str.split(':', 1)
+                        if len(parts) == 2:
                             channel_name = parts[0].strip().replace('@', '')
-                            currency = parts[1].strip().upper()
-                            amount = float(parts[2].strip())
+                            currencies_str = parts[1].strip()
 
                             if channel_name:
-                                print(f"   -> Found override for '{channel_name}': {amount} {currency}")
-                                # This will add or update the entry for this channel
-                                configs[channel_name] = {currency: amount}
+                                # This will override the default wallet for this channel
+                                configs[channel_name] = {}
+
+                                currency_pairs = currencies_str.split('&')
+                                for pair_str in currency_pairs:
+                                    pair_parts = pair_str.split(':')
+                                    if len(pair_parts) == 2:
+                                        currency = pair_parts[0].strip().upper()
+                                        amount = float(pair_parts[1].strip())
+
+                                        print(f"   -> Found override for '{channel_name}': {amount} {currency}")
+                                        configs[channel_name][currency] = amount
+                                    else:
+                                        print(f"   -> Warning: Skipping malformed currency pair: {pair_str}")
                             else:
-                                print(f"   -> Warning: Skipping invalid config entry: {config_str}")
+                                print(f"   -> Warning: Skipping invalid config entry (no channel name): {config_str}")
                         else:
-                            print(f"   -> Warning: Skipping malformed config entry (expected 3 parts): {config_str}")
+                            print(f"   -> Warning: Skipping malformed config entry (expected channel:details): {config_str}")
             except Exception as e:
                 print(f"⚠️ Warning: Error parsing CHANNEL_WALLET_CONFIGS: {e}")
                 print("   Continuing with default configurations for channels.")
@@ -219,15 +233,22 @@ class Settings(BaseSettings):
     def get_channel_start_balance(self, channel: str) -> tuple[str, float]:
         """
         Get the starting currency and amount for a specific channel.
-        Returns: (currency, amount) tuple
+        Returns: (currency, amount) tuple for the primary quote currency (e.g., USDT) or the first available.
         """
         channel_name = str(channel).replace('@', '')
 
         configs = self.channel_wallet_configurations
         if channel_name in configs:
-            # Return the first (and typically only) currency/amount pair
-            for currency, amount in configs[channel_name].items():
-                return currency, amount
+            wallet = configs[channel_name]
+            # Prioritize USDT or USDC as the primary starting balance
+            for quote_currency in ["USDT", "USDC"]:
+                if quote_currency in wallet:
+                    return quote_currency, wallet[quote_currency]
+
+            # If no primary quote currency, return the first one found
+            if wallet:
+                first_currency = next(iter(wallet))
+                return first_currency, wallet[first_currency]
 
         # Default fallback
         return "USDT", 1000.0
@@ -238,8 +259,8 @@ class Settings(BaseSettings):
         if configs:
             print("📊 Channel wallet configurations:")
             for channel, wallet_config in configs.items():
-                for currency, amount in wallet_config.items():
-                    print(f"   📺 {channel}: {amount} {currency}")
+                currencies = [f"{amount} {currency}" for currency, amount in wallet_config.items()]
+                print(f"   📺 {channel}: {', '.join(currencies)}")
         else:
             print("📊 No custom channel configurations found, using defaults")
 

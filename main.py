@@ -146,23 +146,24 @@ class TradingApp:
                     existing_count = self.db.cursor.fetchone()[0]
 
                     if existing_count == 0:
-                        # Get the currency and amount for this channel
-                        for currency, amount in config.items():
-                            # Create initial wallet history entry
-                            initial_balances = {currency: amount}
+                        # The 'config' variable is the initial balances dictionary
+                        initial_balances = config
 
-                            # Convert to USD equivalent (simplified)
-                            usd_value = amount if currency.upper() in ['USD', 'USDT', 'USDC'] else amount
+                        # Convert to USD equivalent (simplified, assumes USDT/USDC are 1:1 with USD)
+                        usd_value = 0.0
+                        for currency, amount in initial_balances.items():
+                            if currency.upper() in ['USD', 'USDT', 'USDC']:
+                                usd_value += amount
+                            # Note: a more complex calculation would fetch live prices for non-USD assets
 
-                            self.db.add_wallet_history_record(
-                                channel_name=channel_name,
-                                total_value_usd=usd_value,
-                                balances=initial_balances
-                            )
+                        self.db.add_wallet_history_record(
+                            channel_name=channel_name,
+                            total_value_usd=usd_value, # Use the calculated USD value
+                            balances=initial_balances
+                        )
 
-                            self.logger.info(
-                                f"   ✅ Created initial wallet history for '{channel_name}': {amount} {currency}")
-                            break  # Only process first currency per channel
+                        self.logger.info(
+                            f"   ✅ Created initial wallet history for '{channel_name}': {initial_balances}")
                     else:
                         self.logger.info(
                             f"   ℹ️  Wallet history exists for '{channel_name}' ({existing_count} records)")
@@ -492,8 +493,8 @@ class TradingApp:
         if self.settings.DRY_RUN:
             self.logger.info(f"💰 Channel-specific wallets initialized with configurations:")
             for channel, config in self.channel_configs.items():
-                for currency, amount in config.items():
-                    self.logger.info(f"   📺 {channel}: {amount} {currency}")
+                currencies = [f"{amount} {currency}" for currency, amount in config.items()]
+                self.logger.info(f"   📺 {channel}: {', '.join(currencies)}")
 
         if not self.settings.DRY_RUN:
             self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")

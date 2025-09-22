@@ -173,28 +173,37 @@ class TradingDatabase:
                 continue # Skip malformed records
         return history
 
-    def initialize_channel_wallet(self, channel: str, currency: str = "USDT", amount: float = 1000.0):
-        """Initialize a channel's wallet with starting balance."""
+    def initialize_channel_wallet(self, channel: str, wallet_config: Dict[str, float]):
+        """Initialize a channel's wallet with starting balances for multiple currencies."""
         try:
-            # Add or update channel config
+            # Prioritize USDT/USDC for the 'start_currency' field in channel_configs for simplicity.
+            primary_currency = "USDT"
+            if primary_currency not in wallet_config:
+                # Fallback to the first currency in the config
+                primary_currency = next(iter(wallet_config)) if wallet_config else "USDT"
+
+            primary_amount = wallet_config.get(primary_currency, 1000.0)
+
+            # Add or update channel config with a primary currency reference
             self.cursor.execute("""
                 INSERT OR REPLACE INTO channel_configs 
                 (channel_name, start_currency, start_amount, updated_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            """, (channel, currency, amount))
+            """, (channel, primary_currency, primary_amount))
 
-            # Add starting balance to wallet
-            self.cursor.execute("""
-                INSERT OR REPLACE INTO wallet 
-                (currency, balance, telegram_channel, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            """, (currency, amount, channel))
+            # Add starting balances to the wallet table for ALL specified currencies
+            for currency, amount in wallet_config.items():
+                self.cursor.execute("""
+                    INSERT OR REPLACE INTO wallet 
+                    (currency, balance, telegram_channel, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """, (currency, amount, channel))
 
             self.conn.commit()
-            print(f"✅ Initialized {channel} wallet with {amount} {currency}")
+            print(f"✅ Initialized {channel} wallet with balances: {wallet_config}")
 
         except Exception as e:
-            print(f"❌ Error initializing channel wallet: {e}")
+            print(f"❌ Error initializing channel wallet for {channel}: {e}")
             self.conn.rollback()
 
     def get_channel_balance(self, channel: str, currency: str = None) -> Dict[str, float]:
@@ -286,7 +295,7 @@ class TradingDatabase:
             WHERE telegram_channel IS NULL
         """)
         return {row[0]: row[1] for row in self.cursor.fetchall()}
-    
+
     def update_balance(self, currency: str, new_balance: float):
         """Update global balance for backwards compatibility."""
         self.cursor.execute("""
@@ -358,10 +367,10 @@ class TradingDatabase:
     def initialize_startup_wallet_history(self):
         """
         Initialize wallet history entries for all channels during application startup.
-        This creates initial snapshots based on the starting balances from channel configs.
+        This creates initial snapshots based on the starting balances from the wallet table.
         """
         try:
-            # Get all channel configurations
+            # Get all channel configurations to know which channels to process
             configs = self.get_channel_configs()
 
             if not configs:
@@ -372,8 +381,6 @@ class TradingDatabase:
 
             for config in configs:
                 channel_name = config['channel_name']
-                start_currency = config['start_currency']
-                start_amount = config['start_amount']
 
                 # Skip template channels
                 if self._is_template_channel(channel_name):
@@ -384,22 +391,32 @@ class TradingDatabase:
                     SELECT COUNT(*) FROM wallet_history 
                     WHERE channel_name = ?
                 """, (channel_name,))
-
                 existing_count = self.cursor.fetchone()[0]
 
                 # Only create initial entry if no history exists
                 if existing_count == 0:
-                    # Create initial balances dictionary
-                    initial_balances = {start_currency: start_amount}
+                    # Get the full initial balance for this channel from the wallet table
+                    initial_balances = self.get_channel_balance(channel_name)
 
-                    # Add the initial wallet history record
+                    if not initial_balances:
+                        print(f"   ⚠️ Wallet for '{channel_name}' is empty, skipping history creation.")
+                        continue
+
+                    # Calculate total USD value (simplified)
+                    total_usd_value = 0.0
+                    for currency, amount in initial_balances.items():
+                        if currency.upper() in ['USDT', 'USDC', 'USD']:
+                            total_usd_value += amount
+                        # A more complex version would fetch prices for other assets
+
+                    # Add the initial wallet history record with all currencies
                     self.add_wallet_history_record(
                         channel_name=channel_name,
-                        total_value_usd=start_amount,  # Assuming start currency is USD-equivalent
+                        total_value_usd=total_usd_value,
                         balances=initial_balances
                     )
 
-                    print(f"   ✅ Created initial wallet history for '{channel_name}': {start_amount} {start_currency}")
+                    print(f"   ✅ Created initial wallet history for '{channel_name}': {initial_balances}")
                 else:
                     print(f"   ℹ️  Wallet history already exists for '{channel_name}' ({existing_count} records)")
 

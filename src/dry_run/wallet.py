@@ -37,11 +37,11 @@ class VirtualWallet:
         for currency, balance in self.default_balances.items():
             self.db.update_balance(currency, balance)
 
-        # Initialize channel-specific wallets
+        # Initialize channel-specific wallets with potentially multiple currencies
         if self.channel_configs:
             for channel, config in self.channel_configs.items():
-                for currency, amount in config.items():
-                    self.db.initialize_channel_wallet(channel, currency, amount)
+                # config is now a dictionary like {'USDT': 1000.0, 'BTC': 0.1}
+                self.db.initialize_channel_wallet(channel, config)
         else:
             # Initialize some common test channels if no config provided
             default_channels = [
@@ -51,9 +51,9 @@ class VirtualWallet:
             ]
 
             for channel in default_channels:
-                self.db.initialize_channel_wallet(channel, "USDT", 1000.0)
+                self.db.initialize_channel_wallet(channel, {"USDT": 1000.0})
 
-        # NEW: Initialize wallet history for all channels
+        # NEW: Initialize wallet history for all channels based on the balances just created
         self.db.initialize_startup_wallet_history()
 
     def get_balance(self) -> Dict[str, float]:
@@ -93,7 +93,8 @@ class VirtualWallet:
         existing_balance = self.get_channel_balance(channel)
         if not existing_balance:
             print(f"🔄 Auto-initializing wallet for new channel: {channel}")
-            self.db.initialize_channel_wallet(channel, currency, amount)
+            # The database method now expects a dictionary
+            self.db.initialize_channel_wallet(channel, {currency: amount})
             return True
         return False
 
