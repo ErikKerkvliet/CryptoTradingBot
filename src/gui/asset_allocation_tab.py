@@ -5,6 +5,7 @@ dynamic pie chart with a timeline slider and clear legend.
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
+import requests
 
 # Try to import matplotlib for charting capabilities
 try:
@@ -15,6 +16,14 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
+
+# Try to import settings for API configuration
+try:
+    from config.settings import settings
+    SETTINGS_AVAILABLE = True
+except (ImportError, Exception):
+    SETTINGS_AVAILABLE = False
+    settings = None  # Define to avoid linting errors
 
 
 class AssetAllocationTab:
@@ -33,6 +42,7 @@ class AssetAllocationTab:
         self.canvas = None
         self.history_data = []
         self.legend_items = []  # Store legend items for updates
+        self.price_cache = {}  # Cache for current asset prices
 
         self.create_widgets()
 
@@ -123,6 +133,20 @@ class AssetAllocationTab:
                 self._update_legend({})
                 return
 
+            # Fetch current prices for all assets in the channel's history
+            if SETTINGS_AVAILABLE:
+                all_symbols = set()
+                for snapshot in self.history_data:
+                    all_symbols.update(snapshot.get("balances", {}).keys())
+                
+                non_stable_symbols = [
+                    s.upper() for s in all_symbols
+                    if s.upper() not in ['USDT', 'USDC', 'USD', 'BUSD', 'DAI', 'EUR']
+                ]
+
+                if non_stable_symbols:
+                    self.price_cache = self._fetch_crypto_prices_sync(non_stable_symbols)
+
             # Configure the slider
             num_snapshots = len(self.history_data)
             self.slider.config(state=tk.NORMAL, from_=0, to=num_snapshots - 1)
@@ -165,13 +189,29 @@ class AssetAllocationTab:
             # Ignore errors that can happen during rapid slider movement
             pass
 
+    def _get_usd_price(self, currency: str) -> float:
+        """Helper to get USD price from cache or estimate for stablecoins."""
+        currency_upper = currency.upper()
+        if currency_upper in ['USDT', 'USDC', 'USD', 'BUSD', 'DAI']:
+            return 1.0
+        if currency_upper == 'EUR':
+            return 1.1  # Simple fallback
+        # Use .get with a default of 0.0 to handle cases where price fetch fails
+        return self.price_cache.get(currency_upper, 0.0)
+
     def _draw_pie_chart(self, balances: dict, timestamp: str):
         """Draws the pie chart based on the provided balance data and timestamp."""
         if not MATPLOTLIB_AVAILABLE:
             return
 
-        # Filter out zero or negligible balances for a cleaner chart
-        chart_data = {currency: balance for currency, balance in balances.items() if balance > 1e-9}
+        # Convert balances to USD values
+        usd_values = {
+            currency: amount * self._get_usd_price(currency)
+            for currency, amount in balances.items()
+        }
+
+        # Filter out zero or negligible values for a cleaner chart
+        chart_data = {currency: value for currency, value in usd_values.items() if value > 1e-9}
         self.ax.clear()
 
         if not chart_data:
@@ -204,72 +244,157 @@ class AssetAllocationTab:
         self.canvas.draw()
 
     def _update_legend(self, balances: dict):
-        """Updates the legend panel with current asset information."""
+        """Updates the legend panel with current asset information based on USD value."""
         # Clear existing legend items
         for widget in self.legend_frame.winfo_children():
-            if hasattr(widget, 'grid_info') and widget.grid_info():
-                widget.destroy()
+            widget.destroy()
 
-        # Filter out zero or negligible balances
-        chart_data = {currency: balance for currency, balance in balances.items() if balance > 1e-9}
+        # Convert balances to USD values for calculations
+        usd_values = {
+            currency: amount * self._get_usd_price(currency)
+            for currency, amount in balances.items()
+        }
+        chart_data_usd = {currency: value for currency, value in usd_values.items() if value > 1e-9}
 
-        if not chart_data:
+        if not chart_data_usd:
             ttk.Label(self.legend_frame, text="No assets to display",
-                     font=("Arial", 9), foreground="gray").grid(row=0, column=0, columnspan=3, pady=5)
+                     font=("Arial", 9), foreground="gray").grid(row=0, column=0, columnspan=4)
             return
 
-        # Header for the legend
-        ttk.Label(self.legend_frame, text="Asset", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 10))
-        ttk.Label(self.legend_frame, text="Balance", font=("Arial", 9, "bold")).grid(row=1, column=0, sticky="w", padx=(0, 10))
-        ttk.Label(self.legend_frame, text="Percentage", font=("Arial", 9, "bold")).grid(row=2, column=0, sticky="w", padx=(0, 10))
+        # Corrected Header for the legend
+        col_offset = 1  # Column 0 is for the color swatch
+        ttk.Label(self.legend_frame, text="Asset", font=("Arial", 9, "bold")).grid(row=0, column=col_offset, sticky="w")
+        ttk.Label(self.legend_frame, text="Amount", font=("Arial", 9, "bold")).grid(row=0, column=col_offset + 1, sticky="w", padx=5)
+        ttk.Label(self.legend_frame, text="Value (%)", font=("Arial", 9, "bold")).grid(row=0, column=col_offset + 2, sticky="w", padx=5)
+        ttk.Separator(self.legend_frame, orient='horizontal').grid(row=1, column=0, columnspan=4, sticky="ew", pady=5)
 
-        # Add a separator
-        ttk.Separator(self.legend_frame, orient='horizontal').grid(row=3, column=0, columnspan=3, sticky="ew", pady=5)
-
-        # Calculate total for percentages
-        total_value = sum(chart_data.values())
+        total_value_usd = sum(chart_data_usd.values())
 
         # Add legend items with color indicators
-        row = 4
-        for currency, balance in sorted(chart_data.items()):
-            percentage = (balance / total_value) * 100 if total_value > 0 else 0
+        row = 2
+        for currency, balance in sorted(balances.items()):
+            usd_value = usd_values.get(currency, 0)
+            if usd_value <= 1e-9:  # Filter out zero-value assets
+                continue
 
-            # Color indicator (small colored square)
+            percentage = (usd_value / total_value_usd) * 100 if total_value_usd > 0 else 0
+
+            # Color indicator
             color_frame = tk.Frame(self.legend_frame, width=15, height=15)
             color_frame.grid(row=row, column=0, sticky="w", padx=(0, 5), pady=2)
-            color_frame.grid_propagate(False)
-
-            # Set the background color if we have color information
             if hasattr(self, 'current_colors') and currency in self.current_colors:
-                # Convert matplotlib color to hex
                 import matplotlib.colors as mcolors
                 hex_color = mcolors.to_hex(self.current_colors[currency])
                 color_frame.configure(bg=hex_color)
             else:
                 color_frame.configure(bg="lightgray")
 
-            # Currency name
-            ttk.Label(self.legend_frame, text=currency, font=("Arial", 9)).grid(
-                row=row, column=1, sticky="w", padx=(0, 10)
-            )
+            # Asset Name
+            ttk.Label(self.legend_frame, text=currency, font=("Arial", 9)).grid(row=row, column=col_offset, sticky="w")
 
-            # Balance and percentage on the same line
-            balance_text = f"{balance:.8f}" if balance < 1 else f"{balance:.2f}"
-            percent_text = f"({percentage:.1f}%)"
-            combined_text = f"{balance_text} {percent_text}"
+            # Amount
+            balance_text = f"{balance:,.8f}".rstrip('0').rstrip('.') if balance < 1 else f"{balance:,.2f}"
+            ttk.Label(self.legend_frame, text=balance_text, font=("Arial", 8)).grid(row=row, column=col_offset + 1, sticky="w", padx=5)
 
-            ttk.Label(self.legend_frame, text=combined_text, font=("Arial", 8),
-                     foreground="dark blue").grid(row=row, column=2, sticky="w")
+            # Value and Percentage
+            value_text = f"${usd_value:,.2f} ({percentage:.1f}%)"
+            ttk.Label(self.legend_frame, text=value_text, font=("Arial", 8), foreground="dark blue").grid(row=row, column=col_offset + 2, sticky="w", padx=5)
 
             row += 1
 
         # Add total value at the bottom
-        if total_value > 0:
-            ttk.Separator(self.legend_frame, orient='horizontal').grid(row=row, column=0, columnspan=3, sticky="ew", pady=5)
+        if total_value_usd > 0:
+            ttk.Separator(self.legend_frame, orient='horizontal').grid(row=row, column=0, columnspan=4, sticky="ew", pady=5)
             row += 1
-            ttk.Label(self.legend_frame, text="Total Value:", font=("Arial", 9, "bold")).grid(
-                row=row, column=1, sticky="w"
-            )
-            total_text = f"{total_value:.2f}" if total_value >= 1 else f"{total_value:.8f}"
-            ttk.Label(self.legend_frame, text=total_text, font=("Arial", 9, "bold"),
-                     foreground="dark green").grid(row=row, column=2, sticky="w")
+            ttk.Label(self.legend_frame, text="Total Value (USD):", font=("Arial", 9, "bold")).grid(row=row, column=0, columnspan=2, sticky="e")
+            total_text = f"${total_value_usd:,.2f}"
+            ttk.Label(self.legend_frame, text=total_text, font=("Arial", 9, "bold"), foreground="dark green").grid(row=row, column=2, columnspan=2, sticky="w", padx=5)
+
+    # --- Price Fetching Methods (from EnhancedWalletTab) ---
+
+    def _fetch_crypto_prices_sync(self, symbols):
+        """Fetch crypto prices synchronously from the configured exchange."""
+        if not SETTINGS_AVAILABLE:
+            return {}
+        try:
+            exchange = getattr(settings, 'EXCHANGE', 'MEXC').upper()
+            if exchange == 'MEXC':
+                return self._fetch_mexc_prices_sync(symbols)
+            elif exchange == 'KRAKEN':
+                return self._fetch_kraken_prices_sync(symbols)
+            else:
+                return self._fetch_coingecko_prices_sync(symbols)
+        except Exception as e:
+            print(f"Error fetching prices: {e}")
+            return {}
+
+    def _fetch_mexc_prices_sync(self, symbols):
+        """Fetch prices from MEXC API."""
+        prices = {}
+        try:
+            url = "https://api.mexc.com/api/v3/ticker/24hr"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            mexc_map = {s.upper() + 'USDT': s.upper() for s in symbols}
+            for item in data:
+                symbol = item.get('symbol', '')
+                if symbol in mexc_map:
+                    original_symbol = mexc_map[symbol]
+                    prices[original_symbol] = float(item.get('lastPrice', 0))
+            return prices
+        except Exception as e:
+            print(f"Error fetching MEXC prices: {e}")
+            return prices
+
+    def _fetch_kraken_prices_sync(self, symbols):
+        """Fetch prices from Kraken API."""
+        prices = {}
+        try:
+            kraken_mapping = {'BTC': 'XBT', 'ETH': 'XETH', 'DOGE': 'XDG'}
+            reverse_mapping = {v: k for k, v in kraken_mapping.items()}
+            
+            kraken_pairs = []
+            for s in symbols:
+                kraken_s = kraken_mapping.get(s, s)
+                kraken_pairs.append(kraken_s + 'USD')
+
+            if not kraken_pairs: return {}
+
+            url = "https://api.kraken.com/0/public/Ticker"
+            params = {"pair": ",".join(kraken_pairs)}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json().get('result', {})
+
+            for pair, price_data in data.items():
+                base = pair.replace('USD', '')
+                original_symbol = reverse_mapping.get(base, base)
+                prices[original_symbol] = float(price_data["c"][0])
+            return prices
+        except Exception as e:
+            print(f"Error fetching Kraken prices: {e}")
+            return prices
+
+    def _fetch_coingecko_prices_sync(self, symbols):
+        """Fetch prices from CoinGecko API (fallback)."""
+        prices = {}
+        try:
+            symbol_to_id = {s.lower(): s for s in symbols} # A simple map
+            # A more robust map would be needed for production
+            # For this context, we assume symbol matches coingecko id
+            
+            url = "https://api.coingecko.com/api/v3/simple/price"
+            params = {'ids': ','.join(symbol_to_id.keys()), 'vs_currencies': 'usd'}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            for coin_id, price_data in data.items():
+                symbol = symbol_to_id.get(coin_id)
+                if symbol and 'usd' in price_data:
+                    prices[symbol] = float(price_data['usd'])
+            return prices
+        except Exception as e:
+            print(f"Error fetching CoinGecko prices: {e}")
+            return prices
