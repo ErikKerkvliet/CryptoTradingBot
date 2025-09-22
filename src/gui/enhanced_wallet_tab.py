@@ -34,7 +34,7 @@ class EnhancedWalletTab:
         control_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # Status indicator
-        self.wallet_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
+        self.wallet_status_label = ttk.Label(control_frame, text="●", foreground="red", font=('Arial', 20))
         self.wallet_status_label.pack(side=tk.LEFT, padx=2)
 
         # Refresh button
@@ -214,11 +214,11 @@ class EnhancedWalletTab:
 
             self.total_value_label.config(text=f"Total Value: ${total_usd_value:.2f} (Est.)")
             self.usd_status_label.config(text="Use 💲 Refresh USD for real prices", foreground="gray")
-            self.wallet_status_label.config(text="🟢")
+            self.wallet_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
         except Exception as e:
             self._show_error_in_tree(f'Error: {e}')
-            self.wallet_status_label.config(text="🔴")
+            self.wallet_status_label.config(text="●", foreground="red")
 
     def _filter_template_data(self, wallet_data):
         """Filter out template/example data."""
@@ -251,7 +251,7 @@ class EnhancedWalletTab:
             'demo'
         ]
 
-        channel_lower = str(channel_name).lower()
+        channel_lower = str(channel_name)
         return any(pattern in channel_lower for pattern in template_patterns)
 
     def refresh_wallet_with_filter(self):
@@ -424,7 +424,7 @@ class EnhancedWalletTab:
 
         def add_channel():
             try:
-                channel = channel_var.get().strip().lower().replace('@', '')
+                channel = channel_var.get().strip().replace('@', '')
                 currency = currency_var.get().strip().upper()
                 amount = float(amount_var.get().strip())
 

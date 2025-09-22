@@ -46,7 +46,7 @@ class SignalAnalyzer:
         otherwise falls back to the DefaultAnalyzer.
         """
         # Clean channel name to use as a key, e.g., '@my_channel' -> 'my_channel'
-        analyzer_key = channel.replace('@', '').lower()
+        analyzer_key = channel.replace('@', '')
 
         analyzer = self._analyzers.get(analyzer_key)
 

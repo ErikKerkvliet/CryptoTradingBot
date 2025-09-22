@@ -413,7 +413,7 @@ class TradingDatabase:
         if not channel_name or channel_name == 'global':
             return False
         template_patterns = ['test_channel', 'example', 'template', 'demo']
-        channel_lower = str(channel_name).lower()
+        channel_lower = str(channel_name)
         return any(pattern in channel_lower for pattern in template_patterns)
 
     def get_trades(self) -> List[Dict[str, Any]]:

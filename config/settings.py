@@ -136,7 +136,7 @@ class Settings(BaseSettings):
 
         print(f"🔧 Initializing default wallets for all target channels: {self.target_channels}")
         for channel in self.target_channels:
-            channel_name = str(channel).replace('@', '').lower()
+            channel_name = str(channel).replace('@', '')
             if channel_name:  # Ensure we don't add empty strings
                 configs[channel_name] = {default_currency: default_amount}
 
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
                     if ':' in config_str:
                         parts = config_str.split(':')
                         if len(parts) == 3:
-                            channel_name = parts[0].strip().replace('@', '').lower()
+                            channel_name = parts[0].strip().replace('@', '')
                             currency = parts[1].strip().upper()
                             amount = float(parts[2].strip())
 
@@ -221,7 +221,7 @@ class Settings(BaseSettings):
         Get the starting currency and amount for a specific channel.
         Returns: (currency, amount) tuple
         """
-        channel_name = str(channel).replace('@', '').lower()
+        channel_name = str(channel).replace('@', '')
 
         configs = self.channel_wallet_configurations
         if channel_name in configs:

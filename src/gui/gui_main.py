@@ -227,7 +227,7 @@ class TradingBotGUI:
                     self.last_log_size = 0  # Start from beginning for new file
                     print(f"📁 Found new log file: {log_file_path}")
                     if hasattr(self, 'log_status_label'):
-                        self.log_status_label.config(text="🟢")
+                        self.log_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
             if self.current_log_file and os.path.exists(self.current_log_file):
                 current_size = os.path.getsize(self.current_log_file)
@@ -250,7 +250,7 @@ class TradingBotGUI:
 
                             # Update log status indicator
                             if hasattr(self, 'log_status_label'):
-                                self.log_status_label.config(text="🟢")
+                                self.log_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
                     self.last_log_size = current_size
                 elif current_size < self.last_log_size:
@@ -259,7 +259,7 @@ class TradingBotGUI:
 
         except Exception as e:
             if hasattr(self, 'log_status_label'):
-                self.log_status_label.config(text="🔴")
+                self.log_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
         # Schedule next check
         self.root.after(500, self.check_log_updates)
@@ -478,7 +478,7 @@ class TradingBotGUI:
         ttk.Checkbutton(control_frame, text="Live logs", variable=self.show_live_var).pack(side=tk.LEFT, padx=5)
 
         # Live refresh indicator
-        self.log_status_label = ttk.Label(control_frame, text="🔴", font=('Arial', 12))
+        self.log_status_label = ttk.Label(control_frame, text="●", foreground="orange", font=('Arial', 20))
         self.log_status_label.pack(side=tk.LEFT, padx=5)
 
         # Bot control buttons (only if integrated mode)
@@ -486,7 +486,7 @@ class TradingBotGUI:
             separator = ttk.Separator(control_frame, orient=tk.VERTICAL)
             separator.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
 
-            self.bot_status_label = ttk.Label(control_frame, text="●", foreground="orange", font=('Arial', 12))
+            self.bot_status_label = ttk.Label(control_frame, text="●", foreground="orange", font=('Arial', 20))
             self.bot_status_label.pack(side=tk.LEFT, padx=5)
 
             ttk.Label(control_frame, text="Bot Status").pack(side=tk.LEFT)
@@ -516,7 +516,7 @@ class TradingBotGUI:
         control_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # Live refresh indicator
-        self.trades_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
+        self.trades_status_label = ttk.Label(control_frame, text="●", foreground="red", font=('Arial', 20))
         self.trades_status_label.pack(side=tk.LEFT, padx=2)
 
         ttk.Button(control_frame, text="Refresh", command=self.refresh_trades).pack(side=tk.LEFT, padx=5)
@@ -571,7 +571,7 @@ class TradingBotGUI:
         control_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # Live refresh indicator
-        self.wallet_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
+        self.wallet_status_label = ttk.Label(control_frame, text="●", foreground="red", font=('Arial', 20))
         self.wallet_status_label.pack(side=tk.LEFT, padx=2)
 
         ttk.Button(control_frame, text="Refresh", command=self.refresh_wallet).pack(side=tk.LEFT, padx=5)
@@ -610,7 +610,7 @@ class TradingBotGUI:
         control_frame.pack(fill=tk.X, padx=5, pady=5)
 
         # Live refresh indicator
-        self.llm_status_label = ttk.Label(control_frame, text="🟢", font=('Arial', 10))
+        self.llm_status_label = ttk.Label(control_frame, text="●", foreground="red", font=('Arial', 20))
         self.llm_status_label.pack(side=tk.LEFT, padx=2)
 
         ttk.Button(control_frame, text="Refresh", command=self.refresh_llm).pack(side=tk.LEFT, padx=5)
@@ -784,7 +784,7 @@ class TradingBotGUI:
                 if hasattr(self, 'total_value_label'):
                     self.total_value_label.config(text="Total Value: $0.00")
             if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🔴")
+                self.wallet_status_label.config(text="●", foreground="red", font=('Arial', 20))
             return
 
         try:
@@ -832,13 +832,13 @@ class TradingBotGUI:
 
             # Update status indicator
             if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🟢")
+                self.wallet_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
         except Exception as e:
             if self.wallet_tree:
                 self.wallet_tree.insert('', tk.END, values=[f'Error: {e}', '0.00000000', '$0.00', 'N/A'])
             if hasattr(self, 'wallet_status_label'):
-                self.wallet_status_label.config(text="🔴")
+                self.wallet_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
     def refresh_llm(self):
         """Refresh the LLM responses table with channel information."""
@@ -848,13 +848,13 @@ class TradingBotGUI:
                 self.llm_tree.delete(item)
             self.llm_tree.insert('', tk.END, values=['', '', 'No database connection', '', '', '', '', '', '', ''])
             if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🔴")
+                self.llm_status_label.config(text="●", foreground="red", font=('Arial', 20))
             return
 
         try:
             # Update status indicator
             if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🟡")
+                self.llm_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
             # Clear existing items
             for item in self.llm_tree.get_children():
@@ -874,7 +874,7 @@ class TradingBotGUI:
                     except Exception as e:
                         self.llm_tree.insert('', tk.END, values=['', '', '', f'Error: {e}', '', '', '', '', '', ''])
                         if hasattr(self, 'llm_status_label'):
-                            self.llm_status_label.config(text="🔴")
+                            self.llm_status_label.config(text="●", foreground="red", font=('Arial', 20))
                         return
                 else:
                     # Using full database object
@@ -950,12 +950,12 @@ class TradingBotGUI:
 
             # Update status indicator
             if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🟢")
+                self.llm_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
         except Exception as e:
             self.llm_tree.insert('', tk.END, values=['', '', '', f'Error: {e}', '', '', '', '', '', ''])
             if hasattr(self, 'llm_status_label'):
-                self.llm_status_label.config(text="🔴")
+                self.llm_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
     def filter_llm_responses(self, event=None):
         """Filter LLM responses by selected channel."""
@@ -1121,7 +1121,7 @@ class TradingBotGUI:
 
         # Update log status indicator
         if hasattr(self, 'log_status_label'):
-            self.log_status_label.config(text="🟢")
+            self.log_status_label.config(text="●", foreground="red", font=('Arial', 20))
 
     def auto_refresh(self):
         """Auto-refresh data continuously for live updates."""
