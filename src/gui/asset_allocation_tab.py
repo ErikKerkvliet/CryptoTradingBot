@@ -184,7 +184,7 @@ class AssetAllocationTab:
             colors = plt.cm.Set3(range(len(labels)))  # Use a consistent color scheme
             wedges, texts, autotexts = self.ax.pie(
                 sizes,
-                labels=labels,
+                labels=None,  # <-- MODIFIED: Set to None to hide labels on the chart
                 autopct='%1.1f%%',
                 startangle=90,
                 pctdistance=0.85,
