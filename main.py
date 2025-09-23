@@ -438,18 +438,9 @@ class TradingApp:
         if buy_price and current_market_price:
             profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
 
-            if current_market_price <= buy_price:
-                self.logger.warning(f"🚫 SELL BLOCKED - Would result in loss!")
-                self.logger.warning(f"   Buy price: {buy_price:.8f} {quote}")
-                self.logger.warning(f"   Current price: {current_market_price:.8f} {quote}")
-                self.logger.warning(f"   Loss would be: {profit_percentage:.2f}%")
-                self.logger.warning(f"   Skipping SELL order to prevent loss.")
-                return None
-            else:
-                self.logger.info(f"✅ PROFIT CHECK PASSED")
-                self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
-                self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
-                self.logger.info(f"   Profit: {profit_percentage:.2f}%")
+            self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
+            self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
+            self.logger.info(f"   Profit: {profit_percentage:.2f}%")
         else:
             self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
             self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
@@ -500,8 +491,11 @@ class TradingApp:
             self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")
             try:
                 live_balances = await self.trader.get_balance()
-                self.db.sync_wallet(live_balances)
-                self.logger.info("✅ Live wallet balances synced with local database.")
+
+                # Create a specific channel name for the live exchange wallet
+                live_wallet_channel_name = f"{self.settings.EXCHANGE.upper()} (Live)"
+                self.db.sync_wallet(live_balances, channel=live_wallet_channel_name)
+                self.logger.info(f"✅ Live wallet balances for '{live_wallet_channel_name}' synced with local database.")
             except Exception as e:
                 self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances from {self.settings.EXCHANGE}: {e}")
                 self.logger.error("   Please check your API keys and network connection. Exiting.")
