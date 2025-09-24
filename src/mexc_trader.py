@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import httpx
 
 from .database import TradingDatabase
+from config.settings import settings
 from .utils.exceptions import InsufficientBalanceError
 
 
@@ -21,6 +22,7 @@ class MexcTrader:
         self.api_key = api_key
         self.api_secret = api_secret
         self.db = db
+        self.enable_trades = getattr(settings, 'ENABLE_TRADES', False)
         self._client = httpx.AsyncClient(timeout=15)
 
     async def _get_server_time(self) -> int:
@@ -107,7 +109,11 @@ class MexcTrader:
                 raise ValueError("Price must be specified for limit orders.")
             params["price"] = f"{price:.8f}"
 
-        #res = await self._signed_request("POST", "/api/v3/order", params=params)
+        if self.enable_trades:
+            res = await self._signed_request("POST", "/api/v3/order", params=params)
+        else:
+            # Simulate order placement
+            res = {"orderId": f"simulated_{int(time.time())}"}
 
         trade_data = {
             "base_currency": base_currency,

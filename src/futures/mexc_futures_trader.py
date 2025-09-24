@@ -2,11 +2,13 @@
 import hmac
 import hashlib
 import json
+import time
 from typing import Dict, Any, Optional
 
 import httpx
 
 from ..database import TradingDatabase
+from config.settings import settings
 from ..utils.exceptions import InsufficientBalanceError
 
 
@@ -20,6 +22,7 @@ class MexcFuturesTrader:
         self.api_secret = api_secret
         self.db = db
         self.default_leverage = default_leverage
+        self.enable_trades = getattr(settings, 'ENABLE_TRADES', False)
         self._client = httpx.AsyncClient(timeout=20)
 
     def _sign(self, timestamp: str, params: str = "") -> str:
@@ -129,7 +132,11 @@ class MexcFuturesTrader:
             "openType": 1,  # 1 for cross, 2 for isolated
         }
 
-        order_id = await self._signed_request("POST", "/api/v1/private/order/place", params)
+        if self.enable_trades:
+            order_id = await self._signed_request("POST", "/api/v1/private/order/place", params)
+        else:
+            # Simulate order placement
+            order_id = {"orderId": f"simulated_{int(time.time())}"}
 
         trade_data = {
             "base_currency": pair.replace("_USDT", ""),

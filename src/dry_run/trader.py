@@ -259,6 +259,30 @@ class DryRunTrader:
                 self.wallet.update_balance(base_currency, new_base_balance)
 
             mode_info = f" ({self.trading_mode})" if self.trading_mode == "FUTURES" else ""
+            print(f"✅ BUY executed{mode_info}: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
+            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
+            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
+
+        elif side.lower() == "sell":
+            available_base = balances.get(base_currency, 0)
+            if available_base < volume:
+                raise InsufficientBalanceError(
+                    f"Insufficient {base_currency} in {balance_source} for the trade. "
+                    f"Need {volume:.8f}, have {available_base:.8f}"
+                )
+
+            # Update balances
+            new_base_balance = available_base - volume
+            new_quote_balance = balances.get(quote_currency, 0) + cost
+
+            if telegram_channel:
+                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
+                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
+            else:
+                self.wallet.update_balance(base_currency, new_base_balance)
+                self.wallet.update_balance(quote_currency, new_quote_balance)
+
+            mode_info = f" ({self.trading_mode})" if self.trading_mode == "FUTURES" else ""
             print(f"✅ SELL executed{mode_info}: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
             print(f"   New {base_currency} balance: {new_base_balance:.8f}")
             print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
