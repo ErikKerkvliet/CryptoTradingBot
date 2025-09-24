@@ -11,6 +11,7 @@ import httpx
 from .database import TradingDatabase
 from .utils.exceptions import InsufficientBalanceError
 
+from config.settings import settings
 
 class KrakenTrader:
     """Handles live trading operations on Kraken."""
@@ -21,6 +22,7 @@ class KrakenTrader:
         self.api_key = api_key
         self.api_secret = api_secret
         self.db = db
+        self.enable_trades = getattr(settings, 'ENABLE_TRADES', False)
         self._client = httpx.AsyncClient(timeout=15)
 
     async def _get_kraken_signature(self, url_path: str, data: Dict[str, Any]) -> str:
@@ -114,8 +116,11 @@ class KrakenTrader:
         if stop_loss:
             params["stop-loss-price"] = f"{stop_loss:.8f}"
 
-
-        res = await self._signed_request("/0/private/AddOrder", params)
+        if self.enable_trades:
+            res = await self._signed_request("/0/private/AddOrder", params)
+        else:
+            # Simulate order placement
+            res = {"txid": [f"simulated_{int(time.time())}"]}
 
         trade_data = {
             "base_currency": base_currency,

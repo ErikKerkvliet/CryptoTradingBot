@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # Format: "channel1:USDT:1000&BTC:0.1,channel2:USDT:2000"
     CHANNEL_WALLET_CONFIGS: Optional[str] = None
 
+    # -- Trade Execution Control --
+    ENABLE_TRADES: bool = False
+
     class Config:
         # CRITICAL: Only load from .env file, never from .env.example
         env_file = str(BASE_DIR / ".env")  # Explicit path to .env only
