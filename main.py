@@ -207,7 +207,7 @@ class TradingApp:
             self.logger.warning("Parsed signal is None, skipping.")
             return
 
-        conf = parsed.get("confidence", 0) or 0
+        conf = int(parsed.get("confidence", 0)) or 0
         if conf < self.settings.MIN_CONFIDENCE_THRESHOLD:
             self.logger.info(f"Signal confidence {conf} below threshold {self.settings.MIN_CONFIDENCE_THRESHOLD}")
             return
@@ -411,10 +411,10 @@ class TradingApp:
             except Exception as e:
                 self.logger.error(f"❌ Error in SellDecisionManager analysis: {e}")
                 # Fall back to simple profit check
-                return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+                return await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
         else:
             # Auto-sell monitor not available, use simple profit check
-            return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+            return await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
 
     async def _handle_manual_sell(self, parsed, channel, base, quote, validated_pair_str, balances):
         """Handle sell using current manual logic (when auto-sell monitor is disabled)."""
@@ -428,9 +428,9 @@ class TradingApp:
         # Get current market price for profit check
         current_market_price = await self.trader.get_market_price(validated_pair_str)
 
-        return await self._simple_profit_check(last_buy_trade, current_market_price, base, quote)
+        return await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
 
-    async def _simple_profit_check(self, last_buy_trade, current_market_price, base, quote):
+    async def _simple_profit_check(self, channel, last_buy_trade, current_market_price, base, quote):
         """Perform the current simple profit check logic."""
         buy_price = last_buy_trade['price']
 
@@ -448,7 +448,16 @@ class TradingApp:
 
         # Use the volume from the last buy trade
         volume = last_buy_trade['volume']
-        base_balance = self.trader.get_balance().get(base, 0.0) if hasattr(self.trader, 'get_balance') else 0.0
+        if hasattr(self.trader, 'get_balance'):
+            if channel and self.settings.DRY_RUN:
+                # Dry run mode: get channel-specific balance
+                trader_balances = await self.trader.get_balance(channel, base)
+            else:
+                # Live trading mode: get exchange balance (or dry run global balance)
+                trader_balances = await self.trader.get_balance()
+            base_balance = trader_balances.get(base, 0.0)
+        else:
+            base_balance = 0.0
 
         self.logger.info(f"Found last BUY trade for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
 

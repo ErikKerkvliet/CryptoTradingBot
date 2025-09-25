@@ -4,6 +4,8 @@ import json
 from openai import OpenAI
 from .abstract_analyzer import AbstractAnalyzer
 from ..utils.exceptions import SignalParseError
+from config.settings import settings
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -74,21 +76,51 @@ class DefaultAnalyzer(AbstractAnalyzer):
 
         return substr_matches > 2
 
-    async def _openai_parse(self, message: str) -> Optional[Dict[str, Any]]:
+    async def _openai_parse(self, message: str, model: str = "gpt-5-nano") -> Optional[Dict[str, Any]]:
         """
         Uses OpenAI to parse the trading signal message into structured JSON.
         """
-        system_prompt = """You are a cryptocurrency trading signal parser. Your job is to extract structured information from trading signals and return it as JSON.
+        system_prompt = """
+        You are a cryptocurrency trading signal parser. 
+        Your task is to extract structured information from trading signals and return it as JSON.
 
-return the following data "action", "base_currency", "quote_currency", "entry_price", "entry_price_range", "take_profit_targets", "stop_loss", "leverage"
-
-Return ONLY the JSON object, no other text."""
+        Rules:
+        - Output ONLY a valid JSON object, no other text.
+        - For BUY messages, always return the following fields:
+          {
+            "action": "buy",
+            "base_currency": "...",
+            "quote_currency": "...",
+            "leverage": "...",
+            "entries": "...",
+            "entry": "...",
+            "targets": ["...", "...", "..."],
+            "stoploss": "...",
+            "confidence": "..."
+          }
+        - For SELL messages, always return the following fields:
+          {
+            "action": "sell",
+            "base_currency": "...",
+            "quote_currency": "...",
+            "profit_target": "...",
+            "profit": "...",
+            "period: "...",
+            "confidence": "..."
+          }
+        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer or float string (e.g. "85" or "92.5").
+        - If the message contains `entries` but no `entry`, then calculate `entry` as the average of the two numbers in `entries`. 
+          Example: if "entries": "9.3-9.33" then "entry" = (9.3 + 9.33) / 2 = 9.315.
+        - Ensure numeric values are strings if uncertain, and arrays are used for multiple values.
+        - If a field is not present in the message, return an empty string or empty array.
+        - For SELL messages, `profit_target` must always be a single number or the text string "all". Never return it as an array.
+        """
 
         user_prompt = f"Parse this trading signal:\n\n{message}"
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-5-mini",
+                model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
@@ -106,9 +138,8 @@ Return ONLY the JSON object, no other text."""
                 if not parsed_data.get("action") or not parsed_data.get("base_currency"):
                     return None
 
-                # Ensure confidence is set to 100
-                parsed_data["confidence"] = 100
-
+                if float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD:
+                    parsed_data = await self._retry_prompt(message, model, reason="low confidence")
                 # Ensure quote_currency defaults to USDT if not set
                 if not parsed_data.get("quote_currency"):
                     parsed_data["quote_currency"] = "USDT"
@@ -118,8 +149,40 @@ Return ONLY the JSON object, no other text."""
             except json.JSONDecodeError as e:
                 print(f"Failed to parse OpenAI response as JSON: {e}")
                 print(f"Response was: {content}")
-                return None
+                return await self._retry_prompt(message, model, reason="json error")
 
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
             return None
+
+    async def _retry_prompt(self, message, model, reason="low confidence"):
+        # Define the model hierarchy
+        model_hierarchy = ["gpt-5-nano", "gpt-5-mini", "gpt-5-codex", "gpt-5"]
+
+        # Error messages for different reasons
+        error_messages = {
+            "low confidence": "Low confidence on {}, retrying with {}",
+            "json error": "JSON parse error on {}, retrying with {}"
+        }
+
+        # Warning messages for when all models fail
+        warning_messages = {
+            "low confidence": "Warning: Low confidence on all models, proceeding with lowest confidence result.",
+            "json error": "Warning: JSON parse error on all models, unable to parse message."
+        }
+
+        try:
+            current_index = model_hierarchy.index(model)
+        except ValueError:
+            print(f"Unknown model: {model}")
+            return None
+
+        # If we're not at the last model, try the next one
+        if current_index < len(model_hierarchy) - 1:
+            next_model = model_hierarchy[current_index + 1]
+            print(error_messages[reason].format(model, next_model))
+            return await self._openai_parse(message, next_model)
+
+        # If we're at the last model, print warning and return None
+        print(warning_messages[reason])
+        return None

@@ -27,13 +27,13 @@ class DryRunTrader:
 
         self._client = httpx.AsyncClient(timeout=15)
 
-    async def get_balance(self, channel: str = None) -> Dict[str, float]:
+    async def get_balance(self, channel: str = None, currency: str = None) -> Dict[str, float]:
         """
         Get balance for a specific channel or global balance.
         If channel is provided, returns that channel's isolated balance.
         """
         if channel:
-            return self.wallet.get_channel_balance(channel)
+            return self.wallet.get_channel_balance(channel, currency)
         else:
             # Return global balance for backwards compatibility
             return self.wallet.get_balance()

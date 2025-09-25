@@ -60,9 +60,9 @@ class VirtualWallet:
         """Get global balance (for backwards compatibility)."""
         return self.db.get_balance()
 
-    def get_channel_balance(self, channel: str) -> Dict[str, float]:
+    def get_channel_balance(self, channel: str, currency: str = None) -> Dict[str, float]:
         """Get balance for a specific channel."""
-        return self.db.get_channel_balance(channel)
+        return self.db.get_channel_balance(channel, currency)
 
     def update_balance(self, currency: str, new_balance: float):
         """Update global balance (for backwards compatibility)."""
