@@ -96,6 +96,7 @@ class KrakenTrader:
         telegram_channel: Optional[str] = None,
         take_profit: Optional[float] = None,
         stop_loss: Optional[float] = None,
+        targets: Optional[list] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Places an order on Kraken."""
@@ -133,6 +134,7 @@ class KrakenTrader:
             "status": "open",
             "take_profit": take_profit,
             "stop_loss": stop_loss,
+            "targets": targets if side.lower() == 'buy' else None,
             **kwargs,
         }
         self.db.add_trade(trade_data)

@@ -531,12 +531,13 @@ class TradingBotGUI:
         self.trades_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # Configure trades columns
-        trades_columns = ['ID', 'Timestamp', 'Channel', 'Pair', 'Side', 'Volume', 'Price', 'Status', 'Leverage']
+        trades_columns = ['ID', 'Timestamp', 'Channel', 'Pair', 'Side', 'Volume', 'Price', 'Status', 'Leverage', 'Targets']
         self.trades_tree['columns'] = trades_columns
 
         for col in trades_columns:
             self.trades_tree.heading(col, text=col)
-            self.trades_tree.column(col, width=100)
+            width = 150 if col == 'Targets' else 100
+            self.trades_tree.column(col, width=width)
 
         # Scrollbar for trades
         trades_scrollbar = ttk.Scrollbar(trades_frame, orient=tk.VERTICAL, command=self.trades_tree.yview)
@@ -703,6 +704,20 @@ class TradingBotGUI:
             # Populate trades
             for trade in trades:
                 pair = f"{trade.get('base_currency', '')}/{trade.get('quote_currency', '')}"
+
+                # Format targets column
+                targets_str = ""
+                if trade.get('side', '').lower() == 'buy':
+                    targets_json = trade.get('targets')
+                    if targets_json:
+                        try:
+                            import json
+                            targets_list = json.loads(targets_json)
+                            if isinstance(targets_list, list):
+                                targets_str = ", ".join(map(str, targets_list))
+                        except (json.JSONDecodeError, TypeError):
+                            targets_str = str(targets_json) # fallback to raw string
+
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
@@ -712,7 +727,8 @@ class TradingBotGUI:
                     f"{trade.get('volume', 0):.6f}",
                     f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
                     trade.get('status', ''),
-                    trade.get('leverage', 0) if trade.get('leverage') else ''
+                    trade.get('leverage', 0) if trade.get('leverage') else '',
+                    targets_str
                 ]
                 self.trades_tree.insert('', tk.END, values=values)
 
@@ -742,6 +758,20 @@ class TradingBotGUI:
             # Populate filtered trades
             for trade in trades:
                 pair = f"{trade.get('base_currency', '')}/{trade.get('quote_currency', '')}"
+
+                # Format targets column (same logic as refresh_trades)
+                targets_str = ""
+                if trade.get('side', '').lower() == 'buy':
+                    targets_json = trade.get('targets')
+                    if targets_json:
+                        try:
+                            import json
+                            targets_list = json.loads(targets_json)
+                            if isinstance(targets_list, list):
+                                targets_str = ", ".join(map(str, targets_list))
+                        except (json.JSONDecodeError, TypeError):
+                            targets_str = str(targets_json)
+
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
@@ -751,7 +781,8 @@ class TradingBotGUI:
                     f"{trade.get('volume', 0):.6f}",
                     f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
                     trade.get('status', ''),
-                    trade.get('leverage', 0) if trade.get('leverage') else ''
+                    trade.get('leverage', 0) if trade.get('leverage') else '',
+                    targets_str
                 ]
                 self.trades_tree.insert('', tk.END, values=values)
 

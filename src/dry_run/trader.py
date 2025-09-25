@@ -204,6 +204,7 @@ class DryRunTrader:
                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
                           take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
                           take_profit_target: Optional[int] = None, leverage: int = 0,
+                          targets: Optional[list] = None,
                           **kwargs) -> Dict[str, Any]:
         """
         Simulate placing an order with enhanced spot/futures support.
@@ -301,6 +302,7 @@ class DryRunTrader:
             "stop_loss": stop_loss,
             "take_profit_target": take_profit_target,
             "leverage": leverage if self.trading_mode == "FUTURES" else 0,
+            "targets": targets if side.lower() == 'buy' else None,
         }
         self.db.add_trade(trade_data)
 

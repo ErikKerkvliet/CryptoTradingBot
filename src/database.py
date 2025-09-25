@@ -34,6 +34,7 @@ class TradingDatabase:
                 stop_loss REAL,
                 take_profit_target INTEGER,
                 leverage INTEGER DEFAULT 0,
+                targets TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -81,7 +82,8 @@ class TradingDatabase:
                 targets TEXT,
                 profit TEXT,
                 period TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                raw_response TEXT
             )
         """)
 
@@ -309,9 +311,10 @@ class TradingDatabase:
 
     def add_trade(self, trade_data: Dict[str, Any]) -> int:
         """Add a new trade to the database."""
+        targets_json = json.dumps(trade_data.get("targets")) if trade_data.get("targets") is not None else None
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
             trade_data["quote_currency"],
@@ -324,7 +327,8 @@ class TradingDatabase:
             trade_data.get("take_profit"),
             trade_data.get("stop_loss"),
             trade_data.get("take_profit_target"),
-            trade_data.get("leverage", 0)
+            trade_data.get("leverage", 0),
+            targets_json
         ))
         self.conn.commit()
         return self.cursor.lastrowid
@@ -353,8 +357,8 @@ class TradingDatabase:
         self.cursor.execute("""
             INSERT INTO llm_responses (channel, action, base_currency, quote_currency, confidence, 
                                      entry, entry_range, leverage, stop_loss, profit_target, targets, 
-                                     profit, period)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     profit, period, raw_response)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             channel,
             response_data.get('action'),
@@ -368,7 +372,8 @@ class TradingDatabase:
             response_data.get('profit_target'),
             json.dumps(response_data.get('targets')),
             response_data.get('profit'),
-            response_data.get('period')
+            response_data.get('period'),
+            response_data.get('raw_response')
         ))
         self.conn.commit()
 

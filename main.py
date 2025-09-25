@@ -301,6 +301,8 @@ class TradingApp:
                         leverage = int(leverage_digits.group(1))
                         self.logger.info(f"Extracted leverage from signal: {leverage}x")
 
+            targets_for_trade = parsed.get("take_profit_targets")
+
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
             self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_target}), Leverage: {leverage or 'Default'}x")
             self.logger.info(f"💰 Using balance from: {balance_source}")
@@ -316,7 +318,8 @@ class TradingApp:
                 take_profit=take_profit,
                 stop_loss=stop_loss,
                 take_profit_target=take_profit_target,
-                leverage=leverage
+                leverage=leverage,
+                targets=targets_for_trade
             )
 
             self.logger.info(f"Order result: {res}")

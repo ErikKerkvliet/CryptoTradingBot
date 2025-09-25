@@ -144,6 +144,8 @@ class DefaultAnalyzer(AbstractAnalyzer):
                 if not parsed_data.get("quote_currency"):
                     parsed_data["quote_currency"] = "USDT"
 
+                parsed_data['raw_response'] = content
+
                 return parsed_data
 
             except json.JSONDecodeError as e:

@@ -111,6 +111,7 @@ class MexcFuturesTrader:
             ordertype: str,
             price: Optional[float] = None,
             leverage: int = 0,
+            targets: Optional[list] = None,
             **kwargs,
     ) -> Dict[str, Any]:
         """Places a futures order on MEXC."""
@@ -147,6 +148,7 @@ class MexcFuturesTrader:
             "ordertype": ordertype,
             "status": "open",
             "leverage": final_leverage,
+            "targets": targets if side.lower() == 'buy' else None,
             **kwargs,
         }
 
