@@ -105,10 +105,10 @@ class DefaultAnalyzer(AbstractAnalyzer):
             "quote_currency": "...",
             "profit_target": "...",
             "profit": "...",
-            "Period: "...",
+            "period: "...",
             "confidence": "..."
           }
-        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct.
+        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer or float string (e.g. "85" or "92.5").
         - If the message contains `entries` but no `entry`, then calculate `entry` as the average of the two numbers in `entries`. 
           Example: if "entries": "9.3-9.33" then "entry" = (9.3 + 9.33) / 2 = 9.315.
         - Ensure numeric values are strings if uncertain, and arrays are used for multiple values.
@@ -138,19 +138,8 @@ class DefaultAnalyzer(AbstractAnalyzer):
                 if not parsed_data.get("action") or not parsed_data.get("base_currency"):
                     return None
 
-                if float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD and model == "gpt-5-nano":
-                    print("Low confidence on gpt-5-nano, retrying with gpt-5-mini")
-                    parsed_data = await self._openai_parse(message, "gpt-5-mini")
-                elif float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD and model == "gpt-5-mini":
-                    print("Low confidence on gpt-5-mini, retrying with gpt-5-codex")
-                    parsed_data = await self._openai_parse(message, "gpt-5-codex")
-                elif float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD and model == "gpt-5-codex":
-                    print("Low confidence on gpt-5-codex, retrying with gpt-5")
-                    parsed_data = await self._openai_parse(message, "gpt-5")
-                elif float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD and model == "gpt-5":
-                    print("Warning: Low confidence on all models, proceeding with lowest confidence result.")
-                    return None
-
+                if float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD:
+                    parsed_data = await self._retry_prompt(message, model, reason="low confidence")
                 # Ensure quote_currency defaults to USDT if not set
                 if not parsed_data.get("quote_currency"):
                     parsed_data["quote_currency"] = "USDT"
@@ -160,8 +149,40 @@ class DefaultAnalyzer(AbstractAnalyzer):
             except json.JSONDecodeError as e:
                 print(f"Failed to parse OpenAI response as JSON: {e}")
                 print(f"Response was: {content}")
-                return None
+                return await self._retry_prompt(message, model, reason="json error")
 
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
             return None
+
+    async def _retry_prompt(self, message, model, reason="low confidence"):
+        # Define the model hierarchy
+        model_hierarchy = ["gpt-5-nano", "gpt-5-mini", "gpt-5-codex", "gpt-5"]
+
+        # Error messages for different reasons
+        error_messages = {
+            "low confidence": "Low confidence on {}, retrying with {}",
+            "json error": "JSON parse error on {}, retrying with {}"
+        }
+
+        # Warning messages for when all models fail
+        warning_messages = {
+            "low confidence": "Warning: Low confidence on all models, proceeding with lowest confidence result.",
+            "json error": "Warning: JSON parse error on all models, unable to parse message."
+        }
+
+        try:
+            current_index = model_hierarchy.index(model)
+        except ValueError:
+            print(f"Unknown model: {model}")
+            return None
+
+        # If we're not at the last model, try the next one
+        if current_index < len(model_hierarchy) - 1:
+            next_model = model_hierarchy[current_index + 1]
+            print(error_messages[reason].format(model, next_model))
+            return await self._openai_parse(message, next_model)
+
+        # If we're at the last model, print warning and return None
+        print(warning_messages[reason])
+        return None

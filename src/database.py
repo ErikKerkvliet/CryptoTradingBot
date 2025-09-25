@@ -73,11 +73,14 @@ class TradingDatabase:
                 base_currency TEXT,
                 quote_currency TEXT,
                 confidence INTEGER,
-                entry_price_range TEXT,
+                entry TEXT,
+                entry_range TEXT,
                 leverage TEXT,
                 stop_loss REAL,
-                take_profit_targets TEXT,
-                take_profit_target INTEGER,
+                profit_target INTEGER,
+                targets TEXT,
+                profit TEXT,
+                period TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -104,9 +107,9 @@ class TradingDatabase:
             return
 
         print("Resetting database for a new dry-run session...")
-        self.cursor.execute("DELETE FROM trades")
+        #self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
-        self.cursor.execute("DELETE FROM llm_responses")
+        # self.cursor.execute("DELETE FROM llm_responses")
         self.cursor.execute("DELETE FROM wallet_history")
         # Note: channel_configs are preserved across sessions.
         self.conn.commit()
@@ -349,18 +352,23 @@ class TradingDatabase:
         """Add a new LLM response to the database with channel information."""
         self.cursor.execute("""
             INSERT INTO llm_responses (channel, action, base_currency, quote_currency, confidence, 
-                                     entry_price_range, leverage, stop_loss, take_profit_targets)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     entry, entry_range, leverage, stop_loss, profit_target, targets, 
+                                     profit, period)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             channel,
             response_data.get('action'),
             response_data.get('base_currency'),
             response_data.get('quote_currency'),
             response_data.get('confidence'),
-            json.dumps(response_data.get('entry_price_range')),
+            response_data.get('entry'),
+            response_data.get('entries'),
             str(response_data.get('leverage')),
-            response_data.get('stop_loss'),
-            json.dumps(response_data.get('take_profit_targets'))
+            response_data.get('stoploss'),
+            response_data.get('profit_target'),
+            json.dumps(response_data.get('targets')),
+            response_data.get('profit'),
+            response_data.get('period')
         ))
         self.conn.commit()
 

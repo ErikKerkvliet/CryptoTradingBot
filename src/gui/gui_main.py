@@ -626,14 +626,15 @@ class TradingBotGUI:
         self.llm_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # Configure LLM columns - ADD CHANNEL COLUMN
-        llm_columns = ['ID', 'Timestamp', 'Channel', 'Action', 'Pair', 'Confidence', 'Entry Range', 'Stop Loss',
-                       'Take Profit', 'Leverage']
+        llm_columns = ['ID', 'Timestamp', 'Channel', 'Action', 'Pair', 'Confidence', 'Entry', 'Entry Range', 'Stop Loss',
+                       'Targets', 'Profit Target', 'Leverage']
         self.llm_tree['columns'] = llm_columns
 
         # Set column widths
         column_widths = {
-            'ID': 50, 'Timestamp': 130, 'Channel': 120, 'Action': 60, 'Pair': 80,
-            'Confidence': 80, 'Entry Range': 100, 'Stop Loss': 80, 'Take Profit': 120, 'Leverage': 80
+            'ID': 10, 'Timestamp': 110, 'Channel': 120, 'Action': 40, 'Pair': 70,
+            'Confidence': 80, 'Entry': 40, 'Entry Range': 100, 'Stop Loss': 65,
+            'Targets': 175, 'Profit Target': 70, 'Leverage': 80
         }
 
         for col in llm_columns:
@@ -897,29 +898,6 @@ class TradingBotGUI:
             # Populate LLM responses
             for response in responses:
                 pair = f"{response.get('base_currency', '')}/{response.get('quote_currency', '')}"
-                entry_range = response.get('entry_price_range', '')
-                if entry_range and entry_range != 'null':
-                    try:
-                        import json
-                        entry_range = json.loads(entry_range)
-                        if isinstance(entry_range, list) and len(entry_range) >= 2:
-                            entry_range = f"{entry_range[0]}-{entry_range[1]}"
-                        else:
-                            entry_range = str(entry_range)
-                    except:
-                        entry_range = str(entry_range)
-
-                take_profit = response.get('take_profit_targets', '')
-                if take_profit and take_profit != 'null':
-                    try:
-                        import json
-                        take_profit = json.loads(take_profit)
-                        if isinstance(take_profit, list):
-                            take_profit = ', '.join(map(str, take_profit[:3]))  # Show first 3
-                        else:
-                            take_profit = str(take_profit)
-                    except:
-                        take_profit = str(take_profit)
 
                 # Format timestamp
                 timestamp = response.get('timestamp', '')
@@ -941,9 +919,11 @@ class TradingBotGUI:
                     response.get('action', ''),
                     pair,
                     response.get('confidence', ''),
-                    entry_range,
+                    response.get('entry', ''),
+                    response.get('entry_range', ''),
                     response.get('stop_loss', ''),
-                    take_profit,
+                    response.get('targets', ''),
+                    response.get('profit_target', ''),
                     response.get('leverage', '')
                 ]
                 self.llm_tree.insert('', tk.END, values=values)
