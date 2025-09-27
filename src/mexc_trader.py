@@ -94,6 +94,7 @@ class MexcTrader:
         take_profit: Optional[float] = None,
         stop_loss: Optional[float] = None,
         targets: Optional[list] = None,
+        llm_response_id: Optional[int] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Places an order on MEXC."""
@@ -128,6 +129,7 @@ class MexcTrader:
             "take_profit": take_profit,
             "stop_loss": stop_loss,
             "targets": targets if side.lower() == 'buy' else None,
+            "llm_response_id": llm_response_id,
             **kwargs,
         }
 

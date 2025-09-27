@@ -35,6 +35,7 @@ class TradingDatabase:
                 take_profit_target INTEGER,
                 leverage INTEGER DEFAULT 0,
                 targets TEXT,
+                llm_response_id INTEGER,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -178,6 +179,27 @@ class TradingDatabase:
                 continue # Skip malformed records
         return history
 
+    def get_trade_and_llm_response(self, trade_id: int) -> Optional[Dict[str, Any]]:
+        """Fetches a trade and its linked LLM response using a JOIN."""
+        self.cursor.execute("""
+            SELECT 
+                t.id as trade_id, t.timestamp as trade_timestamp, t.telegram_channel, t.base_currency, 
+                t.quote_currency, t.side, t.volume, t.price, t.ordertype, t.status, t.leverage, 
+                t.targets as trade_targets, t.stop_loss as trade_stop_loss,
+                llm.id as llm_id, llm.timestamp as llm_timestamp, llm.confidence, llm.entry_range,
+                llm.stop_loss as llm_stop_loss, llm.targets as llm_targets, llm.raw_response
+            FROM trades t
+            LEFT JOIN llm_responses llm ON t.llm_response_id = llm.id
+            WHERE t.id = ?
+        """, (trade_id,))
+
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+
+        columns = [description[0] for description in self.cursor.description]
+        return dict(zip(columns, row))
+
     def initialize_channel_wallet(self, channel: str, wallet_config: Dict[str, float]):
         """Initialize a channel's wallet with starting balances for multiple currencies."""
         try:
@@ -313,8 +335,8 @@ class TradingDatabase:
         """Add a new trade to the database."""
         targets_json = json.dumps(trade_data.get("targets")) if trade_data.get("targets") is not None else None
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets, llm_response_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
             trade_data["quote_currency"],
@@ -328,7 +350,8 @@ class TradingDatabase:
             trade_data.get("stop_loss"),
             trade_data.get("take_profit_target"),
             trade_data.get("leverage", 0),
-            targets_json
+            targets_json,
+            trade_data.get("llm_response_id")
         ))
         self.conn.commit()
         return self.cursor.lastrowid
@@ -376,6 +399,7 @@ class TradingDatabase:
             response_data.get('raw_response')
         ))
         self.conn.commit()
+        return self.cursor.lastrowid
 
     def initialize_startup_wallet_history(self):
         """

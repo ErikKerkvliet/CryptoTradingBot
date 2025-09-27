@@ -12,6 +12,7 @@ from typing import Dict, Any, List
 from datetime import datetime
 import httpx
 import asyncio
+from src.gui.trade_detail_dialog import TradeDetailDialog
 
 # Add parent directory to path and fix imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -188,7 +189,7 @@ class TradingBotGUI:
             self.start_integrated_bot()
 
         # Auto-refresh data more frequently
-        self.auto_refresh_interval = 2000  # 2 seconds for live updates
+        self.auto_refresh_interval = 60000  # 2 seconds for live updates
         self.auto_refresh()
 
         # Live log monitoring (for non-integrated mode)
@@ -525,6 +526,7 @@ class TradingBotGUI:
         self.channel_filter = ttk.Combobox(control_frame, width=20)
         self.channel_filter.pack(side=tk.LEFT, padx=5)
         self.channel_filter.bind('<<ComboboxSelected>>', self.filter_trades)
+        ttk.Button(control_frame, text="View Details", command=self.show_trade_details).pack(side=tk.LEFT, padx=10)
 
         # --- CHANGE 1: Create a frame to hold the tree and scrollbar for proper layout ---
         tree_frame = ttk.Frame(trades_frame)
@@ -562,6 +564,22 @@ class TradingBotGUI:
         # Configure grid weights to make the table expandable
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
+
+    def show_trade_details(self):
+        """Show a dialog with detailed information for the selected trade."""
+        selection = self.trades_tree.selection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select a trade from the table first.", parent=self.root)
+            return
+
+        item = self.trades_tree.item(selection[0])
+        trade_id = item['values'][0]  # ID is the first column
+
+        if self.db:
+            # This now calls the class from the new file
+            TradeDetailDialog(self.root, self.db, trade_id)
+        else:
+            messagebox.showerror("Error", "No database connection available.", parent=self.root)
 
     def create_wallet_tab(self):
         """Create the wallet table tab with enhanced or fallback mode."""

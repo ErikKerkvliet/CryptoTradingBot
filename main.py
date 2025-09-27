@@ -190,8 +190,9 @@ class TradingApp:
             self.logger.info(f"Parsed signal: {parsed}")
 
             if parsed and self.db:
+                llm_response_id = None
                 try:
-                    self.db.add_llm_response(parsed, channel)
+                    llm_response_id = self.db.add_llm_response(parsed, channel)
                     self.logger.info("✅ Successfully saved LLM response to the database.")
                 except Exception as db_err:
                     self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")
@@ -319,7 +320,8 @@ class TradingApp:
                 stop_loss=stop_loss,
                 take_profit_target=take_profit_target,
                 leverage=leverage,
-                targets=targets_for_trade
+                targets=targets_for_trade,
+                llm_response_id=llm_response_id
             )
 
             self.logger.info(f"Order result: {res}")
