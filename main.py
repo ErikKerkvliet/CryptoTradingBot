@@ -280,7 +280,7 @@ class TradingApp:
                 entry = sum(parsed.get("entry_price_range")) / 2.0
 
             stop_loss = parsed.get("stop_loss")
-            take_profit_targets = parsed.get("take_profit_targets")
+            take_profit_targets = parsed.get("targets")
             take_profit = None
             take_profit_target = None
 
@@ -301,7 +301,7 @@ class TradingApp:
                         leverage = int(leverage_digits.group(1))
                         self.logger.info(f"Extracted leverage from signal: {leverage}x")
 
-            targets_for_trade = parsed.get("take_profit_targets")
+            targets_for_trade = parsed.get("targets")
 
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
             self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_target}), Leverage: {leverage or 'Default'}x")
@@ -382,7 +382,7 @@ class TradingApp:
                     'base_currency': base,
                     'quote_currency': quote,
                     'confidence': parsed.get('confidence', 85),
-                    'take_profit_targets': parsed.get('take_profit_targets', []),
+                    'take_profit_targets': parsed.get('targets', []),
                     'stop_loss': parsed.get('stop_loss')
                 }
 

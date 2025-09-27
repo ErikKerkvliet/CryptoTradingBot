@@ -526,23 +526,42 @@ class TradingBotGUI:
         self.channel_filter.pack(side=tk.LEFT, padx=5)
         self.channel_filter.bind('<<ComboboxSelected>>', self.filter_trades)
 
-        # Trades treeview
-        self.trades_tree = ttk.Treeview(trades_frame, show='headings')
-        self.trades_tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # --- CHANGE 1: Create a frame to hold the tree and scrollbar for proper layout ---
+        tree_frame = ttk.Frame(trades_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Configure trades columns
-        trades_columns = ['ID', 'Timestamp', 'Channel', 'Pair', 'Side', 'Volume', 'Price', 'Status', 'Leverage', 'Targets']
+        self.trades_tree = ttk.Treeview(tree_frame, show='headings')
+
+        # Define the correct columns and their widths
+        trades_columns = [
+            'ID', 'Timestamp', 'Channel', 'Side', 'Pair', 'Volume', 'Price',
+            'Leverage', 'Targets', 'Stop Loss', 'Status'
+        ]
+
+        column_widths = {
+            'ID': 30, 'Timestamp': 120, 'Channel': 100, 'Side': 50, 'Pair': 80,
+            'Volume': 100, 'Price': 80, 'Leverage': 80, 'Targets': 170,
+            'Stop Loss': 100, 'Status': 100,
+        }
+
         self.trades_tree['columns'] = trades_columns
 
         for col in trades_columns:
             self.trades_tree.heading(col, text=col)
-            width = 150 if col == 'Targets' else 100
-            self.trades_tree.column(col, width=width)
+            self.trades_tree.column(col, width=column_widths.get(col, 100))
 
+        # --- CHANGE 2: Use .grid() for robust scrollbar placement ---
         # Scrollbar for trades
-        trades_scrollbar = ttk.Scrollbar(trades_frame, orient=tk.VERTICAL, command=self.trades_tree.yview)
+        trades_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.trades_tree.yview)
         self.trades_tree.configure(yscrollcommand=trades_scrollbar.set)
-        trades_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Grid layout for tree and scrollbar
+        self.trades_tree.grid(row=0, column=0, sticky='nsew')
+        trades_scrollbar.grid(row=0, column=1, sticky='ns')
+
+        # Configure grid weights to make the table expandable
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
 
     def create_wallet_tab(self):
         """Create the wallet table tab with enhanced or fallback mode."""
@@ -718,17 +737,19 @@ class TradingBotGUI:
                         except (json.JSONDecodeError, TypeError):
                             targets_str = str(targets_json) # fallback to raw string
 
+                # --- CHANGE 3: Correct the order of 'pair' and 'side' ---
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
                     trade.get('telegram_channel', ''),
-                    pair,
-                    trade.get('side', ''),
+                    trade.get('side', ''),  # Correct: side
+                    pair,  # Correct: pair
                     f"{trade.get('volume', 0):.6f}",
                     f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
-                    trade.get('status', ''),
                     trade.get('leverage', 0) if trade.get('leverage') else '',
-                    targets_str
+                    targets_str,
+                    trade.get('stop_loss', ''),
+                    trade.get('status', '')
                 ]
                 self.trades_tree.insert('', tk.END, values=values)
 
@@ -772,18 +793,21 @@ class TradingBotGUI:
                         except (json.JSONDecodeError, TypeError):
                             targets_str = str(targets_json)
 
+                # --- CHANGE 3: Correct the order of 'pair' and 'side' ---
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
                     trade.get('telegram_channel', ''),
-                    pair,
-                    trade.get('side', ''),
+                    trade.get('side', ''),  # Correct: side
+                    pair,  # Correct: pair
                     f"{trade.get('volume', 0):.6f}",
                     f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
-                    trade.get('status', ''),
                     trade.get('leverage', 0) if trade.get('leverage') else '',
-                    targets_str
+                    targets_str,
+                    trade.get('stop_loss', ''),
+                    trade.get('status', '')
                 ]
+                self.trades_tree.insert('', tk.END, values=values)
                 self.trades_tree.insert('', tk.END, values=values)
 
             self.status_bar.config(text=f"Filtered trades: {len(trades)} records")

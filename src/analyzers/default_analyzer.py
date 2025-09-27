@@ -95,7 +95,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
             "entries": "...",
             "entry": "...",
             "targets": ["...", "...", "..."],
-            "stoploss": "...",
+            "stop_loss": "...",
             "confidence": "..."
           }
         - For SELL messages, always return the following fields:
@@ -108,7 +108,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
             "period: "...",
             "confidence": "..."
           }
-        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer or float string (e.g. "85" or "92.5").
+        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer.
         - If the message contains `entries` but no `entry`, then calculate `entry` as the average of the two numbers in `entries`. 
           Example: if "entries": "9.3-9.33" then "entry" = (9.3 + 9.33) / 2 = 9.315.
         - Ensure numeric values are strings if uncertain, and arrays are used for multiple values.
@@ -159,7 +159,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
 
     async def _retry_prompt(self, message, model, reason="low confidence"):
         # Define the model hierarchy
-        model_hierarchy = ["gpt-5-nano", "gpt-5-mini", "gpt-5-codex", "gpt-5"]
+        model_hierarchy = ["gpt-5-nano", "gpt-5-mini", "gpt-5"]
 
         # Error messages for different reasons
         error_messages = {
