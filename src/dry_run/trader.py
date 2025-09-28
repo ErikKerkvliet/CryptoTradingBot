@@ -302,7 +302,7 @@ class DryRunTrader:
             "take_profit": take_profit,
             "stop_loss": stop_loss,
             "take_profit_target": take_profit_target,
-            "leverage": leverage if self.trading_mode == "FUTURES" else 0,
+            "leverage": leverage if self.trading_mode == "FUTURES" else f"{leverage} dry",
             "targets": targets if side.lower() == 'buy' else None,
             "llm_response_id": llm_response_id,
         }
