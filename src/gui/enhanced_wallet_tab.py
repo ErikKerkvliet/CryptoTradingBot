@@ -722,9 +722,6 @@ class EnhancedWalletTab:
             data = response.json()
 
             if data.get("result"):
-                # Reverse mapping for results
-                reverse_mapping = {v: k for k, v in kraken_mapping.items()}
-
                 for kraken_pair, price_data in data["result"].items():
                     # Find original symbol
                     for original_pair, mapped_pair in kraken_mapping.items():

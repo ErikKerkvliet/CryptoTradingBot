@@ -33,7 +33,7 @@ class TradingDatabase:
                 take_profit REAL,
                 stop_loss REAL,
                 take_profit_target INTEGER,
-                leverage INTEGER DEFAULT 0,
+                leverage TEXT DEFAULT '',
                 targets TEXT,
                 llm_response_id INTEGER,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -349,7 +349,7 @@ class TradingDatabase:
             trade_data.get("take_profit"),
             trade_data.get("stop_loss"),
             trade_data.get("take_profit_target"),
-            trade_data.get("leverage", 0),
+            trade_data.get("leverage", ''),
             targets_json,
             trade_data.get("llm_response_id")
         ))
@@ -391,7 +391,7 @@ class TradingDatabase:
             response_data.get('entry'),
             response_data.get('entries'),
             str(response_data.get('leverage')),
-            response_data.get('stoploss'),
+            response_data.get('stop_loss'),
             response_data.get('profit_target'),
             json.dumps(response_data.get('targets')),
             response_data.get('profit'),

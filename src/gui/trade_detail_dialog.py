@@ -1,5 +1,3 @@
-# CryptoTradingBot-master/src/gui/trade_detail_dialog.py
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import json
@@ -14,7 +12,6 @@ class TradeDetailDialog(tk.Toplevel):
         self.trade_id = trade_id
 
         self.title(f"Details for Trade #{self.trade_id}")
-        # --- CHANGE 1: Adjust window geometry for a wider layout ---
         self.geometry("550x600")
         self.transient(parent)
         self.grab_set()
@@ -58,8 +55,6 @@ class TradeDetailDialog(tk.Toplevel):
         targets_frame = ttk.LabelFrame(top_frame, text="Take-Profit Targets", padding=10)
         targets_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # --- CORRECTED STRUCTURE ---
-        # 1. CREATE THE WIDGET A SINGLE TIME, OUTSIDE THE LOOP.
         targets_tree = ttk.Treeview(targets_frame, show='tree')
         targets_tree.pack(fill=tk.BOTH, expand=True)
 
@@ -68,9 +63,8 @@ class TradeDetailDialog(tk.Toplevel):
             try:
                 targets_list = json.loads(targets_json)
                 if isinstance(targets_list, list) and targets_list:
-                    # 2. USE THE LOOP ONLY TO INSERT DATA ROWS into the widget.
-                    for target in targets_list:
-                        targets_tree.insert('', tk.END, text=f"{target}")
+                    for index, target in enumerate(targets_list):
+                        targets_tree.insert('', tk.END, text=f"{(index + 1)}: {target}")
                 else:
                     # Handle cases where data is invalid or list is empty
                     targets_tree.insert('', tk.END, text="No valid targets found")

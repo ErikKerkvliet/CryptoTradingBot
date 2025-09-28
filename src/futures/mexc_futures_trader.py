@@ -131,7 +131,7 @@ class MexcFuturesTrader:
             "leverage": final_leverage,
             "side": 1 if side.lower() == "buy" else 3,  # 1 for open long, 3 for open short
             "type": 1 if ordertype.lower() == "limit" else 6,  # 1 for limit, 6 for market
-            "openType": 1,  # 1 for cross, 2 for isolated
+            "open_type": 1,  # 1 for cross, 2 for isolated
         }
 
         if self.enable_trades:
