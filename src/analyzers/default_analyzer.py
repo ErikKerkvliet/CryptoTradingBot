@@ -5,6 +5,7 @@ from openai import OpenAI
 from .abstract_analyzer import AbstractAnalyzer
 from ..utils.exceptions import SignalParseError
 from config.settings import settings
+from ..database import TradingDatabase
 
 from dotenv import load_dotenv
 
@@ -13,9 +14,10 @@ load_dotenv()
 class DefaultAnalyzer(AbstractAnalyzer):
     """Parses Telegram messages into structured trading signals using OpenAI."""
 
-    def __init__(self):
+    def __init__(self, db: Optional[TradingDatabase] = None):
         # Initialize OpenAI client - it will automatically use OPENAI_API_KEY from environment
         self.client = OpenAI()
+        self.db = db
 
     async def analyze(self, message: str) -> Dict[str, Any]:
         """
@@ -80,7 +82,12 @@ class DefaultAnalyzer(AbstractAnalyzer):
         """
         Uses OpenAI to parse the trading signal message into structured JSON.
         """
-        system_prompt = """
+        system_prompt = None
+        if self.db:
+            system_prompt = self.db.get_prompt_template('default_system_prompt')
+
+        if not system_prompt:
+            system_prompt = """
         You are a cryptocurrency trading signal parser. 
         Your task is to extract structured information from trading signals and return it as JSON.
 

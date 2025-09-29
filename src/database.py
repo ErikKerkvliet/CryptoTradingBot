@@ -15,6 +15,7 @@ class TradingDatabase:
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
         self._create_tables()
+        self._add_default_prompt_templates()
 
     def _create_tables(self):
         """Create the necessary tables with channel-specific wallet support."""
@@ -98,7 +99,79 @@ class TradingDatabase:
                 balances_json TEXT
             )
         """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS prompt_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                template TEXT NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         self.conn.commit()
+
+    def _add_default_prompt_templates(self):
+        """Adds the default system prompt to the database if it doesn't exist."""
+        try:
+            # Check if the default prompt already exists
+            self.cursor.execute("SELECT COUNT(*) FROM prompt_templates WHERE name = ?", ('default_system_prompt',))
+            count = self.cursor.fetchone()[0]
+
+            if count == 0:
+                print("Inserting default prompt template into the database...")
+                default_prompt = """
+        You are a cryptocurrency trading signal parser. 
+        Your task is to extract structured information from trading signals and return it as JSON.
+
+        Rules:
+        - Output ONLY a valid JSON object, no other text.
+        - For BUY messages, always return the following fields:
+          {
+            "action": "buy",
+            "base_currency": "...",
+            "quote_currency": "...",
+            "leverage": "...",
+            "entries": "...",
+            "entry": "...",
+            "targets": ["...", "...", "..."],
+            "stop_loss": "...",
+            "confidence": "..."
+          }
+        - For SELL messages, always return the following fields:
+          {
+            "action": "sell",
+            "base_currency": "...",
+            "quote_currency": "...",
+            "profit_target": "...",
+            "profit": "...",
+            "period: "...",
+            "confidence": "..."
+          }
+        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer.
+        - If the message contains `entries` but no `entry`, then calculate `entry` as the average of the two numbers in `entries`. 
+          Example: if "entries": "9.3-9.33" then "entry" = (9.3 + 9.33) / 2 = 9.315.
+        - Ensure numeric values are strings if uncertain, and arrays are used for multiple values.
+        - If a field is not present in the message, return an empty string or empty array.
+        - For SELL messages, `profit_target` must always be a single number or the text string "all". Never return it as an array.
+        """
+                self.cursor.execute(
+                    "INSERT INTO prompt_templates (name, template) VALUES (?, ?)",
+                    ('default_system_prompt', default_prompt)
+                )
+                self.conn.commit()
+        except Exception as e:
+            print(f"⚠️ Warning: Could not add default prompt template to database: {e}")
+
+    def get_prompt_template(self, name: str) -> Optional[str]:
+        """Retrieves a prompt template from the database by its name."""
+        try:
+            self.cursor.execute("SELECT template FROM prompt_templates WHERE name = ?", (name,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+        except Exception as e:
+            print(f"❌ Error fetching prompt template '{name}' from database: {e}")
+            return None
 
     def reset_tables(self):
         """

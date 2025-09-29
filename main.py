@@ -55,8 +55,8 @@ class TradingApp:
     def __init__(self):
         self.settings = settings
         self.logger = logger
-        self.analyzer = SignalAnalyzer()
         self.db = TradingDatabase()
+        self.analyzer = SignalAnalyzer(db=self.db)
         self.trader = None
         self.auto_sell_monitor = None  # Will be initialized if enabled
 

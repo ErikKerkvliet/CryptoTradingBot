@@ -6,6 +6,7 @@ import os
 from .utils.exceptions import SignalParseError
 from .analyzers.abstract_analyzer import AbstractAnalyzer
 from .analyzers.default_analyzer import DefaultAnalyzer
+from .database import TradingDatabase
 
 class SignalAnalyzer:
     """
@@ -13,8 +14,9 @@ class SignalAnalyzer:
     based on the channel name.
     """
 
-    def __init__(self):
+    def __init__(self, db: TradingDatabase):
         self._analyzers: Dict[str, AbstractAnalyzer] = {}
+        self.db = db
         self._load_analyzers()
 
     def _load_analyzers(self):
@@ -35,7 +37,7 @@ class SignalAnalyzer:
                         attr = getattr(module, attr_name)
                         if isinstance(attr, type) and issubclass(attr, AbstractAnalyzer) and attr is not AbstractAnalyzer:
                             # Instantiate and store the analyzer, keyed by the channel name
-                            self._analyzers[channel_key] = attr()
+                            self._analyzers[channel_key] = attr(db=self.db)
                             break  # Assume one analyzer class per file
                 except ImportError as e:
                     print(f"Error loading analyzer from {filename}: {e}")
@@ -55,4 +57,4 @@ class SignalAnalyzer:
             return await analyzer.analyze(message)
         else:
             # Fallback to the default regex-based analyzer
-            return await DefaultAnalyzer().analyze(message)
+            return await DefaultAnalyzer(db=self.db).analyze(message)
