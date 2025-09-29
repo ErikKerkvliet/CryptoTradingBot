@@ -192,7 +192,7 @@ class TradingApp:
             if parsed and self.db:
                 llm_response_id = None
                 try:
-                    llm_response_id = self.db.add_llm_response(parsed, channel)
+                    llm_response_id = self.db.add_llm_response(parsed, message, channel)
                     self.logger.info("✅ Successfully saved LLM response to the database.")
                 except Exception as db_err:
                     self.logger.error(f"❌ Failed to save LLM response to database: {db_err}")

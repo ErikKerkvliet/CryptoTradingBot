@@ -72,6 +72,7 @@ class TradingDatabase:
             CREATE TABLE IF NOT EXISTS llm_responses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel TEXT,
+                message TEXT,
                 action TEXT,
                 base_currency TEXT,
                 quote_currency TEXT,
@@ -260,7 +261,7 @@ class TradingDatabase:
                 t.quote_currency, t.side, t.volume, t.price, t.ordertype, t.status, t.leverage, 
                 t.targets as trade_targets, t.stop_loss as trade_stop_loss,
                 llm.id as llm_id, llm.timestamp as llm_timestamp, llm.confidence, llm.entry_range,
-                llm.stop_loss as llm_stop_loss, llm.targets as llm_targets, llm.raw_response
+                llm.stop_loss as llm_stop_loss, llm.targets as llm_targets, llm.raw_response, llm.message
             FROM trades t
             LEFT JOIN llm_responses llm ON t.llm_response_id = llm.id
             WHERE t.id = ?
@@ -462,15 +463,16 @@ class TradingDatabase:
         columns = [description[0] for description in self.cursor.description]
         return dict(zip(columns, row))
 
-    def add_llm_response(self, response_data: Dict[str, Any], channel: str = None):
+    def add_llm_response(self, response_data: Dict[str, Any], message: str, channel: str = None):
         """Add a new LLM response to the database with channel information."""
         self.cursor.execute("""
-            INSERT INTO llm_responses (channel, action, base_currency, quote_currency, confidence, 
+            INSERT INTO llm_responses (channel, message, action, base_currency, quote_currency, confidence, 
                                      entry, entry_range, leverage, stop_loss, profit_target, targets, 
                                      profit, period, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             channel,
+            message,
             response_data.get('action'),
             response_data.get('base_currency'),
             response_data.get('quote_currency'),
