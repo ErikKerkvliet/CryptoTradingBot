@@ -83,8 +83,22 @@ class DefaultAnalyzer(AbstractAnalyzer):
         Uses OpenAI to parse the trading signal message into structured JSON.
         """
         system_prompt = None
+        prompt_id = None
+
         if self.db:
-            system_prompt = self.db.get_prompt_template('default_system_prompt')
+            # Get prompt ID from setting name
+            prompt_name = settings.PROMPT_TEMPLATE_NAME
+            prompt_id = self.db.get_prompt_id_by_name(prompt_name)
+            
+            # If we got an ID, fetch the template
+            if prompt_id:
+                system_prompt = self.db.get_prompt_template_by_id(prompt_id)
+            else:
+                # Fallback if name from .env is not in DB
+                print(f"⚠️ Warning: Prompt template '{prompt_name}' not found. Falling back to default.")
+                prompt_id = self.db.get_prompt_id_by_name('default_system_prompt')
+                if prompt_id:
+                    system_prompt = self.db.get_prompt_template_by_id(prompt_id)
 
         if not system_prompt:
             system_prompt = """
@@ -152,6 +166,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
                     parsed_data["quote_currency"] = "USDT"
 
                 parsed_data['raw_response'] = content
+                parsed_data['prompt_id'] = prompt_id
 
                 return parsed_data
 

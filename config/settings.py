@@ -21,7 +21,10 @@ class Settings(BaseSettings):
     KRAKEN_API_SECRET: Optional[str] = None
     MEXC_API_KEY: Optional[str] = None
     MEXC_API_SECRET: Optional[str] = None
+    
+    # -- OpenAI & Prompts --
     OPENAI_API_KEY: str
+    PROMPT_TEMPLATE_NAME: str = "default_system_prompt"
 
     # -- Telegram API Settings --
     TELEGRAM_API_ID: int

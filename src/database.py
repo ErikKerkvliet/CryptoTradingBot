@@ -86,7 +86,8 @@ class TradingDatabase:
                 profit TEXT,
                 period TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                raw_response TEXT
+                raw_response TEXT,
+                prompt_id INTEGER
             )
         """)
 
@@ -172,6 +173,26 @@ class TradingDatabase:
             return result[0] if result else None
         except Exception as e:
             print(f"❌ Error fetching prompt template '{name}' from database: {e}")
+            return None
+
+    def get_prompt_id_by_name(self, name: str) -> Optional[int]:
+        """Retrieves a prompt template ID from the database by its name."""
+        try:
+            self.cursor.execute("SELECT id FROM prompt_templates WHERE name = ?", (name,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+        except Exception as e:
+            print(f"❌ Error fetching prompt ID for name '{name}' from database: {e}")
+            return None
+
+    def get_prompt_template_by_id(self, prompt_id: int) -> Optional[str]:
+        """Retrieves a prompt template from the database by its ID."""
+        try:
+            self.cursor.execute("SELECT template FROM prompt_templates WHERE id = ?", (prompt_id,))
+            result = self.cursor.fetchone()
+            return result[0] if result else None
+        except Exception as e:
+            print(f"❌ Error fetching prompt template ID '{prompt_id}' from database: {e}")
             return None
 
     def reset_tables(self):
@@ -273,6 +294,30 @@ class TradingDatabase:
 
         columns = [description[0] for description in self.cursor.description]
         return dict(zip(columns, row))
+
+    def get_llm_response_and_prompt(self, llm_id: int) -> Optional[Dict[str, str]]:
+        """Fetches the message from an LLM response and the specific system prompt used."""
+        # First, get the LLM response message and its prompt_id
+        self.cursor.execute("SELECT message, prompt_id FROM llm_responses WHERE id = ?", (llm_id,))
+        result = self.cursor.fetchone()
+        if not result:
+            return None
+
+        message, prompt_id = result
+
+        # Now, get the corresponding system prompt using the prompt_id
+        system_prompt = None
+        if prompt_id:
+            system_prompt = self.get_prompt_template_by_id(prompt_id)
+        
+        # Fallback to the default if no prompt_id was stored or found
+        if not system_prompt:
+            system_prompt = self.get_prompt_template('default_system_prompt')
+
+        return {
+            'message': message,
+            'system_prompt': system_prompt or "Prompt template not found in database."
+        }
 
     def initialize_channel_wallet(self, channel: str, wallet_config: Dict[str, float]):
         """Initialize a channel's wallet with starting balances for multiple currencies."""
@@ -468,8 +513,8 @@ class TradingDatabase:
         self.cursor.execute("""
             INSERT INTO llm_responses (channel, message, action, base_currency, quote_currency, confidence, 
                                      entry, entry_range, leverage, stop_loss, profit_target, targets, 
-                                     profit, period, raw_response)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     profit, period, raw_response, prompt_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             channel,
             message,
@@ -485,7 +530,8 @@ class TradingDatabase:
             json.dumps(response_data.get('targets')),
             response_data.get('profit'),
             response_data.get('period'),
-            response_data.get('raw_response')
+            response_data.get('raw_response'),
+            response_data.get('prompt_id')
         ))
         self.conn.commit()
         return self.cursor.lastrowid

@@ -24,6 +24,7 @@ from datetime import datetime
 import httpx
 import asyncio
 from src.gui.trade_detail_dialog import TradeDetailDialog
+from src.gui.llm_detail_dialog import LLMDetailDialog
 
 try:
     # Import from the project root level
@@ -583,6 +584,21 @@ class TradingBotGUI:
         else:
             messagebox.showerror("Error", "No database connection available.", parent=self.root)
 
+    def show_llm_details(self):
+        """Show a dialog with detailed information for the selected LLM response."""
+        selection = self.llm_tree.selection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select an LLM response from the table first.", parent=self.root)
+            return
+
+        item = self.llm_tree.item(selection[0])
+        llm_id = item['values'][0]  # ID is the first column
+
+        if self.db:
+            LLMDetailDialog(self.root, self.db, llm_id)
+        else:
+            messagebox.showerror("Error", "No database connection available.", parent=self.root)
+
     def create_wallet_tab(self):
         """Create the wallet table tab with enhanced or fallback mode."""
         wallet_frame = ttk.Frame(self.notebook)
@@ -660,6 +676,8 @@ class TradingBotGUI:
         self.llm_channel_filter = ttk.Combobox(control_frame, width=20)
         self.llm_channel_filter.pack(side=tk.LEFT, padx=5)
         self.llm_channel_filter.bind('<<ComboboxSelected>>', self.filter_llm_responses)
+
+        ttk.Button(control_frame, text="View Details", command=self.show_llm_details).pack(side=tk.LEFT, padx=10)
 
         # LLM responses treeview
         self.llm_tree = ttk.Treeview(llm_frame, show='headings')
