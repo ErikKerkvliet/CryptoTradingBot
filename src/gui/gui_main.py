@@ -1,18 +1,6 @@
 """Main GUI application for the trading bot with 4 tabs and live log monitoring."""
-import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
-import threading
-import queue
-import time
 import sys
 import os
-import subprocess
-import logging
-from typing import Dict, Any, List
-from datetime import datetime
-import httpx
-import asyncio
-from src.gui.trade_detail_dialog import TradeDetailDialog
 
 # Add parent directory to path and fix imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +10,20 @@ sys.path.insert(0, project_root)  # Insert at beginning to prioritize
 # Change to project root directory so imports work correctly
 original_cwd = os.getcwd()
 os.chdir(project_root)
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext, messagebox
+import threading
+import queue
+import time
+
+import subprocess
+import logging
+from typing import Dict, Any, List
+from datetime import datetime
+import httpx
+import asyncio
+from src.gui.trade_detail_dialog import TradeDetailDialog
 
 try:
     # Import from the project root level
