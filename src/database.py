@@ -356,15 +356,29 @@ class TradingDatabase:
         self.conn.commit()
         return self.cursor.lastrowid
 
+    def update_trade_status(self, trade_id: int, new_status: str):
+        """Updates the status of a specific trade in the database."""
+        try:
+            self.cursor.execute("""
+                UPDATE trades
+                SET status = ?
+                WHERE id = ?
+            """, (new_status, trade_id))
+            self.conn.commit()
+        except Exception as e:
+            print(f"❌ Error updating trade status for ID {trade_id}: {e}")
+            self.conn.rollback()
+
     def get_last_buy_trade(self, telegram_channel: str, base_currency: str, quote_currency: str) -> Optional[Dict[str, Any]]:
-        """Get the most recent BUY trade for a specific channel and pair."""
+        """Get the most recent BUY trade for a specific channel and pair that is not already closed."""
         self.cursor.execute("""
-            SELECT * FROM trades 
-            WHERE telegram_channel = ? 
-            AND base_currency = ? 
-            AND quote_currency = ? 
+            SELECT * FROM trades
+            WHERE telegram_channel = ?
+            AND base_currency = ?
+            AND quote_currency = ?
             AND LOWER(side) = 'buy'
-            ORDER BY timestamp DESC 
+            AND status != 'closed'
+            ORDER BY timestamp DESC
             LIMIT 1
         """, (telegram_channel, base_currency, quote_currency))
 

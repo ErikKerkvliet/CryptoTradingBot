@@ -382,7 +382,7 @@ class AutoSellMonitor:
             )
 
             # Update original trade status to closed
-            await self._update_trade_status(trade.trade_id, 'closed', sell_volume, current_price)
+            self.db.update_trade_status(trade.trade_id, 'closed')
 
             # Calculate profit
             profit = (current_price - trade.buy_price) * sell_volume if current_price else 0
@@ -403,37 +403,6 @@ class AutoSellMonitor:
         except Exception as e:
             self.logger.error(f"❌ Error executing sell for trade {trade.trade_id}: {e}")
             return False
-
-    async def _update_trade_status(
-            self,
-            trade_id: int,
-            new_status: str,
-            sell_volume: float,
-            sell_price: Optional[float]
-    ):
-        """Update trade status in database."""
-        try:
-            if hasattr(self.db, 'cursor'):
-                # Update the original buy trade status
-                self.db.cursor.execute("""
-                    UPDATE trades 
-                    SET status = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                """, (new_status, trade_id))
-
-                # Add a note about the auto-sell
-                self.db.cursor.execute("""
-                    UPDATE trades 
-                    SET ordertype = ordertype || ' (auto-closed)'
-                    WHERE id = ?
-                """, (trade_id,))
-
-                self.db.conn.commit()
-
-                self.logger.debug(f"📝 Updated trade {trade_id} status to '{new_status}'")
-
-        except Exception as e:
-            self.logger.error(f"❌ Error updating trade status: {e}")
 
     def _is_dry_run(self) -> bool:
         """Check if we're in dry run mode."""
