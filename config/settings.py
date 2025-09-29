@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     ORDER_SIZE_USD: float = 0.0
     MIN_CONFIDENCE_THRESHOLD: int = 80
     MAX_DAILY_TRADES: int = 10
+    DEFAULT_STOP_LOSS_PERCENTAGE: float = 2.0
 
     # -- Futures-Specific Settings --
     DEFAULT_LEVERAGE: int = 10

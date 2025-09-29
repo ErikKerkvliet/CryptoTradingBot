@@ -54,6 +54,7 @@ class SellDecisionManager:
             "min_profit_percentage": 0.5,  # Minimum profit % to consider selling
             "max_loss_percentage": 5.0,  # Maximum loss % before forced sell
             "trailing_stop_percentage": 2.0,  # Trailing stop loss %
+            "default_stop_loss_percentage": 2.0,
 
             # Time-based rules
             "max_hold_hours": 24,  # Maximum hours to hold a position
@@ -82,6 +83,8 @@ class SellDecisionManager:
             # Map settings to internal config
             if hasattr(settings, 'MIN_PROFIT_PERCENTAGE'):
                 self.config['min_profit_percentage'] = settings.MIN_PROFIT_PERCENTAGE
+            if hasattr(settings, 'DEFAULT_STOP_LOSS_PERCENTAGE'):
+                self.config['default_stop_loss_percentage'] = settings.DEFAULT_STOP_LOSS_PERCENTAGE
             if hasattr(settings, 'MAX_DAILY_TRADES'):
                 # Use max daily trades as a risk factor
                 self.config['risk_factor'] = 1.0 / max(1, settings.MAX_DAILY_TRADES)
@@ -131,7 +134,7 @@ class SellDecisionManager:
 
         # 1. Loss Prevention Check (Highest Priority)
         loss_check = await self._check_loss_prevention(
-            profit_percentage, last_buy_trade, additional_data
+            profit_percentage, last_buy_trade, current_price, additional_data
         )
         if loss_check[0] != SellDecision.HOLD:
             return loss_check
@@ -178,21 +181,45 @@ class SellDecisionManager:
             self,
             profit_percentage: float,
             last_buy_trade: Dict[str, Any],
+            current_price: float,
             additional_data: Dict[str, Any]
     ) -> Tuple[SellDecision, List[SellReason], Dict[str, Any]]:
-        """Check for loss prevention conditions."""
+        """Check for loss prevention conditions, including stop-loss."""
 
-        # Prevent sales at a loss (current behavior)
+        buy_price = last_buy_trade.get('price', 0)
+        explicit_stop_loss = last_buy_trade.get('stop_loss')
+
+        # 1. Check for explicit stop-loss from the trade data
+        if explicit_stop_loss and explicit_stop_loss > 0:
+            if current_price <= explicit_stop_loss:
+                additional_data['stop_loss_triggered_at'] = explicit_stop_loss
+                return SellDecision.SELL, [SellReason.STOP_LOSS], {
+                    "message": f"Explicit stop-loss triggered at {explicit_stop_loss}"
+                }
+
+        # 2. If no explicit SL, calculate and check the default stop-loss
+        else:
+            if self.config.get('default_stop_loss_percentage', 0) > 0 and buy_price > 0:
+                default_sl_percentage = self.config['default_stop_loss_percentage']
+                calculated_stop_loss = buy_price - (buy_price / 100 * default_sl_percentage)
+                additional_data['calculated_stop_loss'] = calculated_stop_loss
+
+                if current_price <= calculated_stop_loss:
+                    return SellDecision.SELL, [SellReason.STOP_LOSS], {
+                        "message": f"Default {default_sl_percentage}% stop-loss triggered at {calculated_stop_loss}"
+                    }
+
+        # 3. Prevent sales at a loss IF no stop-loss has been triggered
         if profit_percentage <= 0:
             return SellDecision.BLOCK, [SellReason.LOSS_PREVENTION], {
-                "message": f"Would result in {profit_percentage:.2f}% loss",
-                "recommendation": "Wait for profitable exit or implement stop-loss"
+                "message": f"Would result in {profit_percentage:.2f}% loss (no SL triggered)",
+                "recommendation": "Wait for profitable exit or SL trigger"
             }
 
-        # Check if loss exceeds maximum threshold
+        # 4. Check if loss exceeds maximum threshold (can be a secondary, wider stop-loss)
         if profit_percentage < -self.config['max_loss_percentage']:
             return SellDecision.SELL, [SellReason.STOP_LOSS], {
-                "message": f"Stop-loss triggered at {profit_percentage:.2f}% loss"
+                "message": f"Max loss threshold triggered at {profit_percentage:.2f}% loss"
             }
 
         return SellDecision.HOLD, [], {}

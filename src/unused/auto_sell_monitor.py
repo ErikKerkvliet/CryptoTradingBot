@@ -76,7 +76,7 @@ class AutoSellMonitor:
         self.http_client = httpx.AsyncClient(timeout=10)
 
         # Monitoring configuration
-        self.monitor_interval = 300  # 5 minutes in seconds
+        self.monitor_interval = 150  # 5 minutes in seconds
         self.max_api_calls_per_minute = 10  # Rate limiting
 
         # Internal state
