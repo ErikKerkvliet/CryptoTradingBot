@@ -26,7 +26,6 @@ class TradingDatabase:
                 base_currency TEXT NOT NULL,
                 quote_currency TEXT NOT NULL,
                 telegram_channel TEXT,
-                side TEXT NOT NULL,
                 volume REAL NOT NULL,
                 price REAL,
                 ordertype TEXT NOT NULL,
@@ -279,7 +278,7 @@ class TradingDatabase:
         self.cursor.execute("""
             SELECT 
                 t.id as trade_id, t.timestamp as trade_timestamp, t.telegram_channel, t.base_currency, 
-                t.quote_currency, t.side, t.volume, t.price, t.ordertype, t.status, t.leverage, 
+                t.quote_currency, t.volume, t.price, t.ordertype, t.status, t.leverage, 
                 t.targets as trade_targets, t.stop_loss as trade_stop_loss,
                 llm.id as llm_id, llm.timestamp as llm_timestamp, llm.confidence, llm.entry_range,
                 llm.stop_loss as llm_stop_loss, llm.targets as llm_targets, llm.raw_response, llm.message
@@ -454,13 +453,12 @@ class TradingDatabase:
         """Add a new trade to the database."""
         targets_json = json.dumps(trade_data.get("targets")) if trade_data.get("targets") is not None else None
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, side, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets, llm_response_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets, llm_response_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
             trade_data["quote_currency"],
             trade_data.get("telegram_channel"),
-            trade_data["side"],
             trade_data["volume"],
             trade_data.get("price"),
             trade_data["ordertype"],
@@ -495,7 +493,6 @@ class TradingDatabase:
             WHERE telegram_channel = ?
             AND base_currency = ?
             AND quote_currency = ?
-            AND LOWER(side) = 'buy'
             AND status != 'closed'
             ORDER BY timestamp DESC
             LIMIT 1

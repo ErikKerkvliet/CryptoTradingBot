@@ -37,7 +37,6 @@ class TradeDetailDialog(tk.Toplevel):
 
         details = {
             "Pair": f"{self.data.get('base_currency', '')}/{self.data.get('quote_currency', '')}",
-            "Side": self.data.get('side', ''),
             "Status": self.data.get('status', ''),
             "Timestamp": self.data.get('trade_timestamp', ''),
             "Channel": self.data.get('telegram_channel', ''),

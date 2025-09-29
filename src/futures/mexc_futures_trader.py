@@ -153,8 +153,9 @@ class MexcFuturesTrader:
             "llm_response_id": llm_response_id,
             **kwargs,
         }
+        if side.lower() == 'buy':
+            self.db.add_trade(trade_data)
 
-        self.db.add_trade(trade_data)
         return {"status": "success", "order_id": order_id, **trade_data}
 
     async def close(self):

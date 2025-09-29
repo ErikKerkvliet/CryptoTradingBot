@@ -539,12 +539,12 @@ class TradingBotGUI:
 
         # Define the correct columns and their widths
         trades_columns = [
-            'ID', 'Timestamp', 'Channel', 'Side', 'Pair', 'Volume', 'Price',
+            'ID', 'Timestamp', 'Channel', 'Pair', 'Volume', 'Price',
             'Leverage', 'Targets', 'Stop Loss', 'Status'
         ]
 
         column_widths = {
-            'ID': 30, 'Timestamp': 120, 'Channel': 100, 'Side': 50, 'Pair': 80,
+            'ID': 30, 'Timestamp': 120, 'Channel': 100, 'Pair': 80,
             'Volume': 100, 'Price': 80, 'Leverage': 80, 'Targets': 170,
             'Stop Loss': 100, 'Status': 100,
         }
@@ -555,7 +555,7 @@ class TradingBotGUI:
             self.trades_tree.heading(col, text=col)
             self.trades_tree.column(col, width=column_widths.get(col, 100))
 
-        # --- CHANGE 2: Use .grid() for robust scrollbar placement ---
+        # --- Use .grid() for robust scrollbar placement ---
         # Scrollbar for trades
         trades_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.trades_tree.yview)
         self.trades_tree.configure(yscrollcommand=trades_scrollbar.set)
@@ -764,24 +764,22 @@ class TradingBotGUI:
 
                 # Format targets column
                 targets_str = ""
-                if trade.get('side', '').lower() == 'buy':
-                    targets_json = trade.get('targets')
-                    if targets_json:
-                        try:
-                            import json
-                            targets_list = json.loads(targets_json)
-                            if isinstance(targets_list, list):
-                                targets_str = ", ".join(map(str, targets_list))
-                        except (json.JSONDecodeError, TypeError):
-                            targets_str = str(targets_json) # fallback to raw string
 
-                # --- CHANGE 3: Correct the order of 'pair' and 'side' ---
+                targets_json = trade.get('targets')
+                if targets_json:
+                    try:
+                        import json
+                        targets_list = json.loads(targets_json)
+                        if isinstance(targets_list, list):
+                            targets_str = ", ".join(map(str, targets_list))
+                    except (json.JSONDecodeError, TypeError):
+                        targets_str = str(targets_json) # fallback to raw string
+
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
                     trade.get('telegram_channel', ''),
-                    trade.get('side', ''),  # Correct: side
-                    pair,  # Correct: pair
+                    pair,
                     f"{trade.get('volume', 0):.6f}",
                     f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
                     trade.get('leverage', 0) if trade.get('leverage') else '',

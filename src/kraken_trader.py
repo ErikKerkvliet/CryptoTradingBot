@@ -127,7 +127,6 @@ class KrakenTrader:
         trade_data = {
             "base_currency": base_currency,
             "quote_currency": quote_currency,
-            "side": side,
             "volume": volume,
             "price": price,
             "ordertype": ordertype,
@@ -139,7 +138,9 @@ class KrakenTrader:
             "llm_response_id": llm_response_id,
             **kwargs,
         }
-        self.db.add_trade(trade_data)
+
+        if side.lower() == 'buy':
+            self.db.add_trade(trade_data)
 
         return {"status": "success", "txid": res.get("txid"), **trade_data}
 

@@ -306,7 +306,9 @@ class DryRunTrader:
             "targets": targets if side.lower() == 'buy' else None,
             "llm_response_id": llm_response_id,
         }
-        self.db.add_trade(trade_data)
+
+        if side.lower() == 'buy':
+            self.db.add_trade(trade_data)
 
         # Record wallet snapshot after the trade
         if telegram_channel:
