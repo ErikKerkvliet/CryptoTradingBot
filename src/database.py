@@ -36,7 +36,9 @@ class TradingDatabase:
                 leverage TEXT DEFAULT '',
                 targets TEXT,
                 llm_response_id INTEGER,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                close_price REAL,
+                profit_pct REAL
             )
         """)
 
@@ -207,8 +209,9 @@ class TradingDatabase:
         #self.cursor.execute("DELETE FROM trades")
         self.cursor.execute("DELETE FROM wallet")
         # self.cursor.execute("DELETE FROM llm_responses")
-        self.cursor.execute("DELETE FROM wallet_history")
-        # Note: channel_configs are preserved across sessions.
+        #self.cursor.execute("DELETE FROM wallet_history")
+        self.cursor.execute("DELETE FROM channel_configs")
+        self.cursor.execute("DELETE FROM prompt_templates")
         self.conn.commit()
 
     def add_wallet_history_record(self, channel_name: str, total_value_usd: float, balances: Dict[str, float]):
@@ -308,7 +311,7 @@ class TradingDatabase:
         system_prompt = None
         if prompt_id:
             system_prompt = self.get_prompt_template_by_id(prompt_id)
-        
+
         # Fallback to the default if no prompt_id was stored or found
         if not system_prompt:
             system_prompt = self.get_prompt_template('default_system_prompt')
@@ -473,15 +476,41 @@ class TradingDatabase:
         self.conn.commit()
         return self.cursor.lastrowid
 
-    def update_trade_status(self, trade_id: int, new_status: str):
-        """Updates the status of a specific trade in the database."""
+    def update_trade_status(self, trade_id: int, new_status: str, close_price: Optional[float] = None):
+        """Updates the status of a specific trade and calculates profit if closed."""
         try:
-            self.cursor.execute("""
-                UPDATE trades
-                SET status = ?
-                WHERE id = ?
-            """, (new_status, trade_id))
+            if new_status == 'closed' and close_price is not None:
+                # Get the original buy price to calculate profit
+                self.cursor.execute("SELECT price FROM trades WHERE id = ?", (trade_id,))
+                result = self.cursor.fetchone()
+
+                if result and result[0] is not None:
+                    buy_price = result[0]
+                    if buy_price > 0:
+                        # Calculate profit percentage
+                        profit_pct = ((close_price - buy_price) / buy_price) * 100
+                        # Update status, close price, and profit
+                        self.cursor.execute("""
+                            UPDATE trades
+                            SET status = ?, close_price = ?, profit_pct = ?
+                            WHERE id = ?
+                        """, (new_status, close_price, profit_pct, trade_id))
+                    else:
+                        # Cannot calculate profit if buy price is 0, just update status and close price
+                        self.cursor.execute("""
+                            UPDATE trades SET status = ?, close_price = ? WHERE id = ?
+                        """, (new_status, close_price, trade_id))
+                else:
+                    # If buy price not found, just update status and close price
+                    self.cursor.execute("""
+                        UPDATE trades SET status = ?, close_price = ? WHERE id = ?
+                    """, (new_status, close_price, trade_id))
+            else:
+                # Original behavior if not closing or no close price provided
+                self.cursor.execute("UPDATE trades SET status = ? WHERE id = ?", (new_status, trade_id))
+
             self.conn.commit()
+
         except Exception as e:
             print(f"❌ Error updating trade status for ID {trade_id}: {e}")
             self.conn.rollback()

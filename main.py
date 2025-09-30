@@ -327,9 +327,13 @@ class TradingApp:
 
             # If this was a successful sell, close the original buy trade
             if side == "sell" and original_buy_trade_id is not None:
-                if res:  # A simple check for a valid response from the trader
+                if res and res.get('price') is not None:
+                    close_price = res.get('price')
+                    self.db.update_trade_status(original_buy_trade_id, 'closed', close_price=close_price)
+                    self.logger.info(f"✅ Original BUY trade (ID: {original_buy_trade_id}) has been marked as 'closed' at price {close_price}.")
+                elif res:
                     self.db.update_trade_status(original_buy_trade_id, 'closed')
-                    self.logger.info(f"✅ Original BUY trade (ID: {original_buy_trade_id}) has been marked as 'closed'.")
+                    self.logger.warning(f"⚠️ Sell order may have succeeded but price was not returned. Original BUY trade (ID: {original_buy_trade_id}) was marked 'closed' without profit calculation.")
                 else:
                     self.logger.warning(f"⚠️ Sell order may have failed. Original BUY trade (ID: {original_buy_trade_id}) was NOT closed.")
 
@@ -407,10 +411,10 @@ class TradingApp:
 
             except Exception as e:
                 self.logger.error(f"❌ Error in SellDecisionManager analysis: {e}")
-                volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
+                volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote, balances)
                 return (volume, last_buy_trade['id']) if volume else (None, None)
         else:
-            volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
+            volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote, balances)
             return (volume, last_buy_trade['id']) if volume else (None, None)
 
     async def _handle_manual_sell(self, parsed, channel, base, quote, validated_pair_str, balances):
@@ -422,15 +426,17 @@ class TradingApp:
             return None, None
 
         current_market_price = await self.trader.get_market_price(validated_pair_str)
-        volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote)
+        volume = await self._simple_profit_check(channel, last_buy_trade, current_market_price, base, quote, balances)
 
         if volume and volume > 0:
             return volume, last_buy_trade['id']
 
         return None, None
 
-    async def _simple_profit_check(self, channel, last_buy_trade, current_market_price, base, quote):
-        """Perform the current simple profit check logic."""
+    async def _simple_profit_check(self, channel, last_buy_trade, current_market_price, base, quote, balances):
+        """
+        Perform the current simple profit check logic using pre-fetched balances.
+        """
         buy_price = last_buy_trade['price']
 
         # Profit check
@@ -447,16 +453,11 @@ class TradingApp:
 
         # Use the volume from the last buy trade
         volume = last_buy_trade['volume']
-        if hasattr(self.trader, 'get_balance'):
-            if channel and self.settings.DRY_RUN:
-                # Dry run mode: get channel-specific balance
-                trader_balances = await self.trader.get_balance(channel, base)
-            else:
-                # Live trading mode: get exchange balance (or dry run global balance)
-                trader_balances = await self.trader.get_balance()
-            base_balance = trader_balances.get(base, 0.0)
-        else:
-            base_balance = 0.0
+
+        # The `balances` dict is now passed directly, representing either the
+        # live exchange balance (when DRY_RUN=false) or the channel-specific
+        # dry-run balance. This avoids a redundant API call.
+        base_balance = balances.get(base, 0.0)
 
         self.logger.info(f"Found last BUY trade for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
 

@@ -539,14 +539,14 @@ class TradingBotGUI:
 
         # Define the correct columns and their widths
         trades_columns = [
-            'ID', 'Timestamp', 'Channel', 'Pair', 'Volume', 'Price',
-            'Leverage', 'Targets', 'Stop Loss', 'Status'
+            'ID', 'Timestamp', 'Channel', 'Pair', 'Volume', 'Entry Price', 'Close Price',
+            'Leverage', 'Targets', 'Stop Loss', 'Profit', 'Status'
         ]
 
         column_widths = {
-            'ID': 30, 'Timestamp': 120, 'Channel': 100, 'Pair': 80,
-            'Volume': 100, 'Price': 80, 'Leverage': 80, 'Targets': 170,
-            'Stop Loss': 100, 'Status': 100,
+            'ID': 20, 'Timestamp': 120, 'Channel': 100, 'Pair': 50,
+            'Volume': 100, 'Entry Price': 60, 'Close Price': 60, 'Leverage': 60, 'Targets': 170,
+            'Stop Loss': 60, 'Profit': 60, 'Status': 100,
         }
 
         self.trades_tree['columns'] = trades_columns
@@ -764,7 +764,6 @@ class TradingBotGUI:
 
                 # Format targets column
                 targets_str = ""
-
                 targets_json = trade.get('targets')
                 if targets_json:
                     try:
@@ -773,7 +772,16 @@ class TradingBotGUI:
                         if isinstance(targets_list, list):
                             targets_str = ", ".join(map(str, targets_list))
                     except (json.JSONDecodeError, TypeError):
-                        targets_str = str(targets_json) # fallback to raw string
+                        targets_str = str(targets_json)
+
+                # Format new columns
+                entry_price_val = trade.get('price')
+                close_price_val = trade.get('close_price')
+                profit_pct_val = trade.get('profit_pct')
+
+                entry_price_str = f"{entry_price_val:.6f}" if entry_price_val is not None else 'Market'
+                close_price_str = f"{close_price_val:.6f}" if close_price_val is not None else ''
+                profit_str = f"{profit_pct_val:.5f}%" if profit_pct_val is not None else ''
 
                 values = [
                     trade.get('id', ''),
@@ -781,10 +789,12 @@ class TradingBotGUI:
                     trade.get('telegram_channel', ''),
                     pair,
                     f"{trade.get('volume', 0):.6f}",
-                    f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
+                    entry_price_str,
+                    close_price_str,
                     trade.get('leverage', 0) if trade.get('leverage') else '',
                     targets_str,
                     trade.get('stop_loss', ''),
+                    profit_str,
                     trade.get('status', '')
                 ]
                 self.trades_tree.insert('', tk.END, values=values)
@@ -816,34 +826,41 @@ class TradingBotGUI:
             for trade in trades:
                 pair = f"{trade.get('base_currency', '')}/{trade.get('quote_currency', '')}"
 
-                # Format targets column (same logic as refresh_trades)
+                # Format targets column
                 targets_str = ""
-                if trade.get('side', '').lower() == 'buy':
-                    targets_json = trade.get('targets')
-                    if targets_json:
-                        try:
-                            import json
-                            targets_list = json.loads(targets_json)
-                            if isinstance(targets_list, list):
-                                targets_str = ", ".join(map(str, targets_list))
-                        except (json.JSONDecodeError, TypeError):
-                            targets_str = str(targets_json)
+                targets_json = trade.get('targets')
+                if targets_json:
+                    try:
+                        import json
+                        targets_list = json.loads(targets_json)
+                        if isinstance(targets_list, list):
+                            targets_str = ", ".join(map(str, targets_list))
+                    except (json.JSONDecodeError, TypeError):
+                        targets_str = str(targets_json)
 
-                # --- CHANGE 3: Correct the order of 'pair' and 'side' ---
+                # Format new columns
+                entry_price_val = trade.get('price')
+                close_price_val = trade.get('close_price')
+                profit_pct_val = trade.get('profit_pct')
+
+                entry_price_str = f"{entry_price_val:.6f}" if entry_price_val is not None else 'Market'
+                close_price_str = f"{close_price_val:.6f}" if close_price_val is not None else ''
+                profit_str = f"{profit_pct_val:.5f}%" if profit_pct_val is not None else ''
+
                 values = [
                     trade.get('id', ''),
                     trade.get('timestamp', ''),
                     trade.get('telegram_channel', ''),
-                    trade.get('side', ''),  # Correct: side
-                    pair,  # Correct: pair
+                    pair,
                     f"{trade.get('volume', 0):.6f}",
-                    f"{trade.get('price', 0):.6f}" if trade.get('price') else 'Market',
+                    entry_price_str,
+                    close_price_str,
                     trade.get('leverage', 0) if trade.get('leverage') else '',
                     targets_str,
                     trade.get('stop_loss', ''),
+                    profit_str,
                     trade.get('status', '')
                 ]
-                self.trades_tree.insert('', tk.END, values=values)
                 self.trades_tree.insert('', tk.END, values=values)
 
             self.status_bar.config(text=f"Filtered trades: {len(trades)} records")
