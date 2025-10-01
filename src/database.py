@@ -279,11 +279,13 @@ class TradingDatabase:
 
     def get_trade_and_llm_response(self, trade_id: int) -> Optional[Dict[str, Any]]:
         """Fetches a trade and its linked LLM response using a JOIN."""
+        # --- MODIFIED: Added t.close_price and t.profit_pct to the SELECT statement ---
         self.cursor.execute("""
             SELECT 
                 t.id as trade_id, t.timestamp as trade_timestamp, t.telegram_channel, t.base_currency, 
                 t.quote_currency, t.volume, t.price, t.ordertype, t.status, t.leverage, 
                 t.targets as trade_targets, t.stop_loss as trade_stop_loss,
+                t.close_price, t.profit_pct,
                 llm.id as llm_id, llm.timestamp as llm_timestamp, llm.confidence, llm.entry_range,
                 llm.stop_loss as llm_stop_loss, llm.targets as llm_targets, llm.raw_response, llm.message
             FROM trades t

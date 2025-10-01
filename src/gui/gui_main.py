@@ -20,7 +20,7 @@ import time
 import subprocess
 import logging
 from typing import Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 import asyncio
 from src.gui.trade_detail_dialog import TradeDetailDialog
@@ -778,6 +778,7 @@ class TradingBotGUI:
                 entry_price_val = trade.get('price')
                 close_price_val = trade.get('close_price')
                 profit_pct_val = trade.get('profit_pct')
+                trade_timestamp = self.format_utc_to_local(trade.get('timestamp', ''))
 
                 entry_price_str = f"{entry_price_val:.6f}" if entry_price_val is not None else 'Market'
                 close_price_str = f"{close_price_val:.6f}" if close_price_val is not None else ''
@@ -785,7 +786,7 @@ class TradingBotGUI:
 
                 values = [
                     trade.get('id', ''),
-                    trade.get('timestamp', ''),
+                    trade_timestamp,
                     trade.get('telegram_channel', ''),
                     pair,
                     f"{trade.get('volume', 0):.6f}",
@@ -842,6 +843,7 @@ class TradingBotGUI:
                 entry_price_val = trade.get('price')
                 close_price_val = trade.get('close_price')
                 profit_pct_val = trade.get('profit_pct')
+                trade_timestamp = self.format_utc_to_local(trade.get('timestamp', ''))
 
                 entry_price_str = f"{entry_price_val:.6f}" if entry_price_val is not None else 'Market'
                 close_price_str = f"{close_price_val:.6f}" if close_price_val is not None else ''
@@ -849,7 +851,7 @@ class TradingBotGUI:
 
                 values = [
                     trade.get('id', ''),
-                    trade.get('timestamp', ''),
+                    trade_timestamp,
                     trade.get('telegram_channel', ''),
                     pair,
                     f"{trade.get('volume', 0):.6f}",
@@ -1008,7 +1010,7 @@ class TradingBotGUI:
                 pair = f"{response.get('base_currency', '')}/{response.get('quote_currency', '')}"
 
                 # Format timestamp
-                timestamp = response.get('timestamp', '')
+                timestamp = self.format_utc_to_local(response.get('timestamp', ''))
                 if timestamp:
                     try:
                         from datetime import datetime
@@ -1019,6 +1021,7 @@ class TradingBotGUI:
                         timestamp = dt.strftime('%m/%d %H:%M:%S')
                     except:
                         pass  # Keep original if parsing fails
+
 
                 values = [
                     response.get('id', ''),
@@ -1250,6 +1253,27 @@ class TradingBotGUI:
                 self.enhanced_wallet.refresh_wallet()
         else:
             self.refresh_wallet()
+
+    def format_utc_to_local(self, utc_str: str) -> str:
+        """Converts a UTC timestamp string from the DB to a local time string for display."""
+        if not utc_str:
+            return ""
+        try:
+            # Parse the UTC string into a datetime object
+            # The format from SQLite is '%Y-%m-%d %H:%M:%S'
+            utc_dt = datetime.strptime(utc_str, '%Y-%m-%d %H:%M:%S')
+
+            # Convert to a timezone-aware object, assuming original is UTC
+            utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+
+            # Convert to the system's local timezone
+            local_dt = utc_dt.astimezone(None)
+
+            # Format for display
+            return local_dt.strftime('%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            # If parsing fails, return the original string
+            return utc_str
 
 
 def main(integrated_bot=False):
