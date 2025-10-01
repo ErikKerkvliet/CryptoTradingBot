@@ -68,12 +68,13 @@ class TradingDatabase:
             )
         """)
 
-        # LLM responses table (no changes needed)
+        # LLM responses table (MODIFIED: Added 'model' column)
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS llm_responses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel TEXT,
                 message TEXT,
+                model TEXT,
                 action TEXT,
                 base_currency TEXT,
                 quote_currency TEXT,
@@ -211,7 +212,7 @@ class TradingDatabase:
         # self.cursor.execute("DELETE FROM llm_responses")
         #self.cursor.execute("DELETE FROM wallet_history")
         self.cursor.execute("DELETE FROM channel_configs")
-        self.cursor.execute("DELETE FROM prompt_templates")
+        # self.cursor.execute("DELETE FROM prompt_templates") # FIX: Do not delete prompts
         self.conn.commit()
 
     def add_wallet_history_record(self, channel_name: str, total_value_usd: float, balances: Dict[str, float]):
@@ -298,14 +299,14 @@ class TradingDatabase:
         return dict(zip(columns, row))
 
     def get_llm_response_and_prompt(self, llm_id: int) -> Optional[Dict[str, str]]:
-        """Fetches the message from an LLM response and the specific system prompt used."""
-        # First, get the LLM response message and its prompt_id
-        self.cursor.execute("SELECT message, prompt_id FROM llm_responses WHERE id = ?", (llm_id,))
+        """Fetches the message, model, raw_response, and system prompt for an LLM response."""
+        # --- MODIFIED: Added 'raw_response' to the SELECT statement ---
+        self.cursor.execute("SELECT message, model, prompt_id, raw_response FROM llm_responses WHERE id = ?", (llm_id,))
         result = self.cursor.fetchone()
         if not result:
             return None
 
-        message, prompt_id = result
+        message, model, prompt_id, raw_response = result
 
         # Now, get the corresponding system prompt using the prompt_id
         system_prompt = None
@@ -318,6 +319,8 @@ class TradingDatabase:
 
         return {
             'message': message,
+            'model': model,
+            'raw_response': raw_response,
             'system_prompt': system_prompt or "Prompt template not found in database."
         }
 
@@ -534,8 +537,54 @@ class TradingDatabase:
         columns = [description[0] for description in self.cursor.description]
         return dict(zip(columns, row))
 
+    def add_pending_llm_request(self, message: str, channel: str, model: str) -> int:
+        """Adds a record for an LLM request before it's sent. Returns the new record's ID."""
+        try:
+            self.cursor.execute("""
+                INSERT INTO llm_responses (message, channel, model)
+                VALUES (?, ?, ?)
+            """, (message, channel, model))
+            self.conn.commit()
+            return self.cursor.lastrowid
+        except Exception as e:
+            print(f"❌ Error adding pending LLM request: {e}")
+            self.conn.rollback()
+            return -1
+
+    def update_llm_response(self, llm_response_id: int, response_data: Dict[str, Any]):
+        """Updates an existing LLM record with the response from the API."""
+        try:
+            self.cursor.execute("""
+                UPDATE llm_responses SET
+                    action = ?, base_currency = ?, quote_currency = ?, confidence = ?,
+                    entry = ?, entry_range = ?, leverage = ?, stop_loss = ?,
+                    profit_target = ?, targets = ?, profit = ?, period = ?,
+                    raw_response = ?, prompt_id = ?
+                WHERE id = ?
+            """, (
+                response_data.get('action'),
+                response_data.get('base_currency'),
+                response_data.get('quote_currency'),
+                response_data.get('confidence'),
+                response_data.get('entry'),
+                response_data.get('entries'),
+                str(response_data.get('leverage')),
+                response_data.get('stop_loss'),
+                response_data.get('profit_target'),
+                json.dumps(response_data.get('targets')),
+                response_data.get('profit'),
+                response_data.get('period'),
+                response_data.get('raw_response'),
+                response_data.get('prompt_id'),
+                llm_response_id
+            ))
+            self.conn.commit()
+        except Exception as e:
+            print(f"❌ Error updating LLM response for ID {llm_response_id}: {e}")
+            self.conn.rollback()
+
     def add_llm_response(self, response_data: Dict[str, Any], message: str, channel: str = None):
-        """Add a new LLM response to the database with channel information."""
+        """(DEPRECATED by new flow but kept for safety) Add a new LLM response to the database with channel information."""
         self.cursor.execute("""
             INSERT INTO llm_responses (channel, message, action, base_currency, quote_currency, confidence, 
                                      entry, entry_range, leverage, stop_loss, profit_target, targets, 

@@ -54,7 +54,7 @@ class SignalAnalyzer:
 
         if analyzer:
             # Use the specific analyzer found for this channel
-            return await analyzer.analyze(message)
+            return await analyzer.analyze(message, channel)
         else:
             # Fallback to the default regex-based analyzer
-            return await DefaultAnalyzer(db=self.db).analyze(message)
+            return await DefaultAnalyzer(db=self.db).analyze(message, channel)

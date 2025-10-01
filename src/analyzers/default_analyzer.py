@@ -19,7 +19,7 @@ class DefaultAnalyzer(AbstractAnalyzer):
         self.client = OpenAI()
         self.db = db
 
-    async def analyze(self, message: str) -> Dict[str, Any]:
+    async def analyze(self, message: str, channel: str) -> Dict[str, Any]:
         """
         Analyzes a message using OpenAI and returns a structured signal.
         This is the default analyzer used when no channel-specific
@@ -31,12 +31,15 @@ class DefaultAnalyzer(AbstractAnalyzer):
         if not (buy or sell):
             raise SignalParseError("Message does not appear to be a trade signal")
 
-        result = await self._openai_parse(message)
+        # Pass channel to the parsing method
+        result = await self._openai_parse(message, channel)
 
         if not result:
             raise SignalParseError("Failed to parse signal with DefaultAnalyzer using OpenAI")
 
-        result['action'] = 'BUY' if buy else 'SELL'
+        # The action is set inside _openai_parse now, but we can ensure it here
+        if 'action' not in result or not result['action']:
+            result['action'] = 'BUY' if buy else 'SELL'
 
         return result
 
@@ -78,18 +81,20 @@ class DefaultAnalyzer(AbstractAnalyzer):
 
         return substr_matches > 2
 
-    async def _openai_parse(self, message: str, model: str = "gpt-5-nano") -> Optional[Dict[str, Any]]:
+    async def _openai_parse(self, message: str, channel: str, model: str = "gpt-5-nano") -> Optional[Dict[str, Any]]:
         """
         Uses OpenAI to parse the trading signal message into structured JSON.
+        Logs the request before and updates after the call.
         """
         system_prompt = None
         prompt_id = None
+        llm_response_id = -1 # Default to -1 in case of failure
 
         if self.db:
             # Get prompt ID from setting name
             prompt_name = settings.PROMPT_TEMPLATE_NAME
             prompt_id = self.db.get_prompt_id_by_name(prompt_name)
-            
+
             # If we got an ID, fetch the template
             if prompt_id:
                 system_prompt = self.db.get_prompt_template_by_id(prompt_id)
@@ -140,18 +145,21 @@ class DefaultAnalyzer(AbstractAnalyzer):
         user_prompt = f"Parse this trading signal:\n\n{message}"
 
         try:
+            # Log the pending request to the database
+            if self.db:
+                llm_response_id = self.db.add_pending_llm_request(message, channel, model)
+
             response = self.client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                max_completion_tokens=3000            )
+                max_completion_tokens=3000
+            )
 
-            # Extract the JSON from the response
             content = response.choices[0].message.content.strip()
 
-            # Try to parse the JSON
             try:
                 parsed_data = json.loads(content)
 
@@ -159,37 +167,43 @@ class DefaultAnalyzer(AbstractAnalyzer):
                 if not parsed_data.get("action") or not parsed_data.get("base_currency"):
                     return None
 
+                # Add metadata to the parsed data before updating the DB
+                parsed_data['raw_response'] = content
+                parsed_data['prompt_id'] = prompt_id
+
+                # Update the record with the response
+                if self.db and llm_response_id != -1:
+                    self.db.update_llm_response(llm_response_id, parsed_data)
+
                 if float(parsed_data.get("confidence")) < settings.MIN_CONFIDENCE_THRESHOLD:
-                    parsed_data = await self._retry_prompt(message, model, reason="low confidence")
-                # Ensure quote_currency defaults to USDT if not set
+                    return await self._retry_prompt(message, channel, model, reason="low confidence")
+
                 if not parsed_data.get("quote_currency"):
                     parsed_data["quote_currency"] = "USDT"
 
-                parsed_data['raw_response'] = content
-                parsed_data['prompt_id'] = prompt_id
+                # --- NEW: Return the database ID with the result ---
+                parsed_data['llm_response_id'] = llm_response_id
 
                 return parsed_data
 
             except json.JSONDecodeError as e:
                 print(f"Failed to parse OpenAI response as JSON: {e}")
                 print(f"Response was: {content}")
-                return await self._retry_prompt(message, model, reason="json error")
+                return await self._retry_prompt(message, channel, model, reason="json error")
 
         except Exception as e:
             print(f"Error calling OpenAI API: {e}")
             return None
 
-    async def _retry_prompt(self, message, model, reason="low confidence"):
+    async def _retry_prompt(self, message, channel, model, reason="low confidence"):
         # Define the model hierarchy
         model_hierarchy = ["gpt-5-nano", "gpt-5-mini", "gpt-5"]
 
-        # Error messages for different reasons
         error_messages = {
             "low confidence": "Low confidence on {}, retrying with {}",
             "json error": "JSON parse error on {}, retrying with {}"
         }
 
-        # Warning messages for when all models fail
         warning_messages = {
             "low confidence": "Warning: Low confidence on all models, proceeding with lowest confidence result.",
             "json error": "Warning: JSON parse error on all models, unable to parse message."
@@ -201,12 +215,11 @@ class DefaultAnalyzer(AbstractAnalyzer):
             print(f"Unknown model: {model}")
             return None
 
-        # If we're not at the last model, try the next one
         if current_index < len(model_hierarchy) - 1:
             next_model = model_hierarchy[current_index + 1]
             print(error_messages[reason].format(model, next_model))
-            return await self._openai_parse(message, next_model)
+            # Pass the channel to the retry call
+            return await self._openai_parse(message, channel, next_model)
 
-        # If we're at the last model, print warning and return None
         print(warning_messages[reason])
         return None
