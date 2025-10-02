@@ -9,3 +9,4 @@ tests/
 trading_bot.log*
 test_*
 debug_*
+*.png

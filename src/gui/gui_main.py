@@ -123,6 +123,20 @@ class LogCapture:
 class TradingBotGUI:
     def __init__(self, root, run_bot=False):
         self.root = root
+
+        try:
+            # Construct the path to the icon relative to the project root
+            icon_path = os.path.join(project_root, "assets", "icon.png")
+            if os.path.exists(icon_path):
+                # Load the PNG image using PhotoImage
+                photo = tk.PhotoImage(file=icon_path)
+                # Set the icon for the window (and all future top-level windows)
+                self.root.iconphoto(True, photo)
+            else:
+                print("Note: Could not find application icon at", icon_path)
+        except Exception as e:
+            print(f"Could not set application icon: {e}")
+
         self.run_bot = run_bot
 
         # Initialize database connection and type first
