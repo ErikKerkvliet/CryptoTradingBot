@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     MIN_CONFIDENCE_THRESHOLD: int = 80
     MAX_DAILY_TRADES: int = 10
     DEFAULT_STOP_LOSS_PERCENTAGE: float = 2.0
+    MIN_PROFIT_PERCENTAGE: float = 0.5
 
     # -- Futures-Specific Settings --
     DEFAULT_LEVERAGE: int = 10

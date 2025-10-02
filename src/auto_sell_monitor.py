@@ -76,7 +76,7 @@ class AutoSellMonitor:
         self.http_client = httpx.AsyncClient(timeout=10)
 
         # Monitoring configuration
-        self.monitor_interval = 150  # 5 minutes in seconds
+        self.monitor_interval = 300  # 5 minutes in seconds
         self.max_api_calls_per_minute = 10  # Rate limiting
 
         # Internal state
@@ -190,7 +190,7 @@ class AutoSellMonitor:
                            volume, price, timestamp, take_profit, stop_loss, leverage
                     FROM trades 
                     WHERE status IN ('open', 'simulated_open') 
-                    AND side = 'buy'
+                    AND ordertype = 'buy'
                     ORDER BY timestamp DESC
                 """)
 
@@ -382,7 +382,7 @@ class AutoSellMonitor:
             )
 
             # Update original trade status to closed
-            self.db.update_trade_status(trade.trade_id, 'closed')
+            self.db.update_trade_status(trade.trade_id, 'closed', close_price=current_price)
 
             # Calculate profit
             profit = (current_price - trade.buy_price) * sell_volume if current_price else 0
@@ -473,49 +473,3 @@ class AutoSellMonitor:
         except Exception as e:
             self.logger.error(f"❌ Error force checking trade {trade_id}: {e}")
             return None
-
-
-# Example usage (for future integration):
-"""
-# This is how the AutoSellMonitor would be integrated into the trading system:
-
-async def example_integration():
-    from src.auto_sell_monitor import AutoSellMonitor
-    from src.database import TradingDatabase
-    from src.dry_run.trader import DryRunTrader
-    from config.settings import settings
-
-    # Initialize components
-    db = TradingDatabase()
-    trader = DryRunTrader()
-
-    # Create and start the monitor
-    monitor = AutoSellMonitor(db, trader, settings)
-
-    try:
-        # Start monitoring (runs indefinitely)
-        await monitor.start_monitoring()
-    except KeyboardInterrupt:
-        print("Stopping monitor...")
-        await monitor.stop_monitoring()
-
-# Integration into main.py would look like:
-class TradingApp:
-    def __init__(self):
-        # ... existing initialization ...
-        self.auto_sell_monitor = AutoSellMonitor(self.db, self.trader, self.settings, self.logger)
-
-    async def run(self):
-        # ... existing startup code ...
-
-        # Start auto-sell monitoring in background
-        monitor_task = asyncio.create_task(self.auto_sell_monitor.start_monitoring())
-
-        try:
-            # Run main telegram monitoring
-            await self.telegram.start(self.on_message)
-        finally:
-            # Stop auto-sell monitor
-            await self.auto_sell_monitor.stop_monitoring()
-            monitor_task.cancel()
-"""
