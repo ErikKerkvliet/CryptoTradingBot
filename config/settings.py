@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # -- Auto Sell Monitor Configuration --
     AUTO_SELL_MONITOR: bool = False
 
+    # -- AI-Driven Decision Making --
+    ENABLE_LLM_TP_SELECTOR: bool = False
+    LLM_TP_SELECTOR_MODEL: str = "gpt-5"
+
     # -- Channel-Specific Configurations --
     # Format: "channel1:USDT:1000&BTC:0.1,channel2:USDT:2000"
     CHANNEL_WALLET_CONFIGS: Optional[str] = None

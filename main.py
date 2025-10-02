@@ -20,6 +20,8 @@ from src.signal_analyzer import SignalAnalyzer
 from src.dry_run.trader import DryRunTrader
 from src.utils.exceptions import InsufficientBalanceError, PairNotFoundError, SignalParseError
 from src.database import TradingDatabase
+from src.take_profit_decision_manager import TakeProfitDecisionManager
+
 
 # Conditional imports for auto-sell monitor
 if settings.AUTO_SELL_MONITOR:
@@ -50,7 +52,6 @@ else:  # SPOT trading
 
 logger = setup_logger(level=settings.LOG_LEVEL)
 
-
 class TradingApp:
     def __init__(self):
         self.settings = settings
@@ -59,6 +60,14 @@ class TradingApp:
         self.analyzer = SignalAnalyzer(db=self.db)
         self.trader = None
         self.auto_sell_monitor = None  # Will be initialized if enabled
+
+        # Initialize the new Take-Profit Decision Manager (if enabled in settings)
+        if self.settings.ENABLE_LLM_TP_SELECTOR:
+            self.tp_manager = TakeProfitDecisionManager(self.settings, self.db)
+            self.logger.info("🤖 LLM Take-Profit Selector is ENABLED")
+        else:
+            self.tp_manager = None
+            self.logger.info(" Gunning for T3: Static Take-Profit Selector is ENABLED")
 
         # Directly use the channel configurations from the settings file.
         # This correctly loads and respects the CHANNEL_WALLET_CONFIGS from your .env file.
@@ -184,7 +193,7 @@ class TradingApp:
 
     async def on_message(self, message: str, channel: str):
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")
-        llm_response_id = None # Initialize here
+        llm_response_id = None  # Initialize here
 
         try:
             # The analyzer now handles its own DB logging and returns the ID
@@ -228,7 +237,8 @@ class TradingApp:
 
         try:
             validated_pair_str, base, quote = await self.validator.validate_and_convert(base, quote)
-            self.logger.info(f"Validated pair for {self.settings.EXCHANGE} ({self.settings.TRADING_MODE}): {validated_pair_str} ({base}/{quote})")
+            self.logger.info(
+                f"Validated pair for {self.settings.EXCHANGE} ({self.settings.TRADING_MODE}): {validated_pair_str} ({base}/{quote})")
         except PairNotFoundError as e:
             self.logger.warning(f"Pair not available on {self.settings.EXCHANGE}: {e}")
             return
@@ -266,9 +276,11 @@ class TradingApp:
             else:  # side == "sell"
                 sell_result_tuple = (None, None)
                 if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE:
-                    sell_result_tuple = await self._handle_auto_monitored_sell(parsed, channel, base, quote, validated_pair_str, balances)
+                    sell_result_tuple = await self._handle_auto_monitored_sell(parsed, channel, base, quote,
+                                                                               validated_pair_str, balances)
                 else:
-                    sell_result_tuple = await self._handle_manual_sell(parsed, channel, base, quote, validated_pair_str, balances)
+                    sell_result_tuple = await self._handle_manual_sell(parsed, channel, base, quote, validated_pair_str,
+                                                                       balances)
 
                 volume, original_buy_trade_id = sell_result_tuple
 
@@ -282,15 +294,37 @@ class TradingApp:
 
             stop_loss = parsed.get("stop_loss")
             take_profit_targets = parsed.get("targets")
+
+            # --- DYNAMIC/STATIC TAKE-PROFIT LOGIC ---
             take_profit = None
             take_profit_target = None
+            llm_tp_reasoning = None
 
-            if take_profit_targets and len(take_profit_targets) >= 3:
-                take_profit = take_profit_targets[-3]
-                take_profit_target = len(take_profit_targets) - 3
-            elif take_profit_targets:
-                take_profit = take_profit_targets[-1]
-                take_profit_target = 0
+            if take_profit_targets:
+                # Use the LLM manager if it's enabled and we are placing a BUY order
+                if side == "buy" and self.tp_manager:
+                    self.logger.info("🤖 Using LLM to select the best take-profit target...")
+                    take_profit, take_profit_target, llm_tp_reasoning = await self.tp_manager.select_best_target(parsed)
+
+                    if take_profit is not None:
+                        self.logger.info(
+                            f"   🧠 LLM Chose Target #{take_profit_target + 1} ({take_profit}). Reason: {llm_tp_reasoning}")
+                    else:
+                        self.logger.warning("   ⚠️ LLM TP selection failed, falling back to static logic.")
+
+                # Fallback to static logic if manager is disabled, failed, or it's a sell signal
+                if take_profit is None:
+                    if len(take_profit_targets) >= 3:
+                        take_profit = take_profit_targets[-3]
+                        take_profit_target = len(take_profit_targets) - 3
+                        if side == "buy":  # Only set reasoning for buy orders
+                            llm_tp_reasoning = "Static Fallback: Chose third to last target for balance."
+                    elif take_profit_targets:
+                        take_profit = take_profit_targets[-1]
+                        take_profit_target = 0
+                        if side == "buy":
+                            llm_tp_reasoning = "Static Fallback: Chose the final target."
+            # --- END TAKE-PROFIT LOGIC ---
 
             # Futures Specific Logic
             leverage = 0
@@ -305,10 +339,11 @@ class TradingApp:
             targets_for_trade = parsed.get("targets")
 
             self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
-            self.logger.info(f"SL: {stop_loss}, TP: {take_profit} (Key: {take_profit_target}), Leverage: {leverage or 'Default'}x")
+            self.logger.info(
+                f"SL: {stop_loss}, TP: {take_profit} (Target Index: {take_profit_target}), Leverage: {leverage or 'Default'}x")
             self.logger.info(f"💰 Using balance from: {balance_source}")
 
-            # Place the order (leverage kwarg will be safely ignored by spot traders)
+            # Place the order (leverage & reasoning kwargs will be safely ignored by spot traders)
             res = await self.trader.place_order(
                 pair=validated_pair_str,
                 side=side,
@@ -321,7 +356,8 @@ class TradingApp:
                 take_profit_target=take_profit_target,
                 leverage=leverage,
                 targets=targets_for_trade,
-                llm_response_id=llm_response_id
+                llm_response_id=llm_response_id,
+                llm_tp_reasoning=llm_tp_reasoning
             )
 
             self.logger.info(f"Order result: {res}")
@@ -332,19 +368,20 @@ class TradingApp:
                 if res and res.get('price') is not None:
                     close_price = res.get('price')
                     self.db.update_trade_status(original_buy_trade_id, 'closed', close_price=close_price)
-                    self.logger.info(f"✅ Original BUY trade (ID: {original_buy_trade_id}) has been marked as 'closed' at price {close_price}.")
+                    self.logger.info(
+                        f"✅ Original BUY trade (ID: {original_buy_trade_id}) has been marked as 'closed' at price {close_price}.")
                 elif res:
                     self.db.update_trade_status(original_buy_trade_id, 'closed')
-                    self.logger.warning(f"⚠️ Sell order may have succeeded but price was not returned. Original BUY trade (ID: {original_buy_trade_id}) was marked 'closed' without profit calculation.")
+                    self.logger.warning(
+                        f"⚠️ Sell order may have succeeded but price was not returned. Original BUY trade (ID: {original_buy_trade_id}) was marked 'closed' without profit calculation.")
                 else:
-                    self.logger.warning(f"⚠️ Sell order may have failed. Original BUY trade (ID: {original_buy_trade_id}) was NOT closed.")
-
+                    self.logger.warning(
+                        f"⚠️ Sell order may have failed. Original BUY trade (ID: {original_buy_trade_id}) was NOT closed.")
 
         except InsufficientBalanceError as e:
             self.logger.warning(f"Insufficient balance to place order: {e}")
         except Exception as e:
             self.logger.exception(f"Order failed: {e}")
-
     async def _calculate_buy_volume(self, parsed, balances, quote, validated_pair_str):
         """Calculate volume for buy orders."""
         quote_balance = balances.get(quote, 0.0)

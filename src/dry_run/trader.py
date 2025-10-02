@@ -206,6 +206,7 @@ class DryRunTrader:
                           take_profit_target: Optional[int] = None, leverage: int = 0,
                           targets: Optional[list] = None,
                           llm_response_id: Optional[int] = None,
+                          llm_tp_reasoning: Optional[str] = None,
                           **kwargs) -> Dict[str, Any]:
         """
         Simulate placing an order with enhanced spot/futures support.
@@ -305,6 +306,7 @@ class DryRunTrader:
             "leverage": leverage if self.trading_mode == "FUTURES" else f"{leverage} dry",
             "targets": targets if side.lower() == 'buy' else None,
             "llm_response_id": llm_response_id,
+            "llm_tp_reasoning": llm_tp_reasoning,
         }
 
         if side.lower() == 'buy':

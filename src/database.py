@@ -3,7 +3,7 @@ import sqlite3
 from typing import Dict, Any, List, Optional
 import json
 from config.settings import BASE_DIR, settings
-
+from assets.prompts import PROMPT_TEMPLATES
 
 class TradingDatabase:
     """Enhanced database with channel-specific wallet management."""
@@ -19,7 +19,6 @@ class TradingDatabase:
 
     def _create_tables(self):
         """Create the necessary tables with channel-specific wallet support."""
-        # Original trades table (no changes needed)
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,6 +35,7 @@ class TradingDatabase:
                 leverage TEXT DEFAULT '',
                 targets TEXT,
                 llm_response_id INTEGER,
+                llm_tp_reasoning TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 close_price REAL,
                 profit_pct REAL
@@ -116,56 +116,34 @@ class TradingDatabase:
         self.conn.commit()
 
     def _add_default_prompt_templates(self):
-        """Adds the default system prompt to the database if it doesn't exist."""
-        try:
-            # Check if the default prompt already exists
-            self.cursor.execute("SELECT COUNT(*) FROM prompt_templates WHERE name = ?", ('default_system_prompt',))
-            count = self.cursor.fetchone()[0]
-
-            if count == 0:
-                print("Inserting default prompt template into the database...")
-                default_prompt = """
-        You are a cryptocurrency trading signal parser. 
-        Your task is to extract structured information from trading signals and return it as JSON.
-
-        Rules:
-        - Output ONLY a valid JSON object, no other text.
-        - For BUY messages, always return the following fields:
-          {
-            "action": "buy",
-            "base_currency": "...",
-            "quote_currency": "...",
-            "leverage": "...",
-            "entries": "...",
-            "entry": "...",
-            "targets": ["...", "...", "..."],
-            "stop_loss": "...",
-            "confidence": "..."
-          }
-        - For SELL messages, always return the following fields:
-          {
-            "action": "sell",
-            "base_currency": "...",
-            "quote_currency": "...",
-            "profit_target": "...",
-            "profit": "...",
-            "period: "...",
-            "confidence": "..."
-          }
-        - `confidence` must be a percentage (0–100) representing how confident the LLM is that the parsed data is correct, in the format of an integer.
-        - If the message contains `entries` but no `entry`, then calculate `entry` as the average of the two numbers in `entries`. 
-          Example: if "entries": "9.3-9.33" then "entry" = (9.3 + 9.33) / 2 = 9.315.
-        - Ensure numeric values are strings if uncertain, and arrays are used for multiple values.
-        - If a field is not present in the message, return an empty string or empty array.
-        - For SELL messages, `profit_target` must always be a single number or the text string "all". Never return it as an array.
         """
-                self.cursor.execute(
-                    "INSERT INTO prompt_templates (name, template) VALUES (?, ?)",
-                    ('default_system_prompt', default_prompt)
-                )
-                self.conn.commit()
+        Adds or updates all default prompts from the llm_prompts file into the database.
+        This ensures the database is always in sync with the code's prompt definitions.
+        """
+        try:
+            print("🔧 Synchronizing LLM prompt templates with the database...")
+            for name, template in PROMPT_TEMPLATES.items():
+                # Check if the prompt already exists
+                self.cursor.execute("SELECT id FROM prompt_templates WHERE name = ?", (name,))
+                result = self.cursor.fetchone()
+
+                if result:
+                    # If it exists, UPDATE it to ensure it's always the latest version
+                    prompt_id = result[0]
+                    self.cursor.execute(
+                        "UPDATE prompt_templates SET template = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (template, prompt_id)
+                    )
+                else:
+                    # If it doesn't exist, INSERT it
+                    self.cursor.execute(
+                        "INSERT INTO prompt_templates (name, template) VALUES (?, ?)",
+                        (name, template)
+                    )
+            self.conn.commit()
+            print("✅ Prompt templates synchronization complete.")
         except Exception as e:
-            print(f"⚠️ Warning: Could not add default prompt template to database: {e}")
+            print(f"⚠️ Warning: Could not synchronize prompt templates with database: {e}")
 
     def get_prompt_template(self, name: str) -> Optional[str]:
         """Retrieves a prompt template from the database by its name."""
@@ -461,8 +439,8 @@ class TradingDatabase:
         """Add a new trade to the database."""
         targets_json = json.dumps(trade_data.get("targets")) if trade_data.get("targets") is not None else None
         self.cursor.execute("""
-            INSERT INTO trades (base_currency, quote_currency, telegram_channel, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets, llm_response_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trades (base_currency, quote_currency, telegram_channel, volume, price, ordertype, status, take_profit, stop_loss, take_profit_target, leverage, targets, llm_response_id, llm_tp_reasoning)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             trade_data["base_currency"],
             trade_data["quote_currency"],
@@ -476,7 +454,8 @@ class TradingDatabase:
             trade_data.get("take_profit_target"),
             trade_data.get("leverage", ''),
             targets_json,
-            trade_data.get("llm_response_id")
+            trade_data.get("llm_response_id"),
+            trade_data.get("llm_tp_reasoning") # NEW VALUE
         ))
         self.conn.commit()
         return self.cursor.lastrowid
