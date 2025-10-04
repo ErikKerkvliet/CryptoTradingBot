@@ -11,19 +11,68 @@ import httpx
 from .database import TradingDatabase
 from config.settings import settings
 from .utils.exceptions import InsufficientBalanceError
+from src.utils.place_order import PlaceOrder
 
 
 class MexcTrader:
     """Handles live trading operations on MEXC."""
 
     BASE_URL = "https://api.mexc.com"
+    exchange = "MEXC" # For logging purposes
 
     def __init__(self, api_key: str, api_secret: str, db: TradingDatabase):
         self.api_key = api_key
         self.api_secret = api_secret
         self.db = db
         self.enable_trades = getattr(settings, 'ENABLE_TRADES', False)
+        self.order_manager = PlaceOrder(db)
         self._client = httpx.AsyncClient(timeout=15)
+
+    async def place_order(self, **kwargs) -> Optional[Dict[str, Any]]:
+        """
+        Public method to place an order, delegating to the centralized PlaceOrder manager.
+        """
+        return await self.order_manager.execute(trader=self, **kwargs)
+
+    async def _execute_order(
+        self,
+        pair: str,
+        side: str,
+        volume: float,
+        ordertype: str,
+        price: Optional[float] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Places a spot order on MEXC. Internal method called by PlaceOrder manager."""
+        base_currency, quote_currency = self._split_pair(pair)
+        params = {
+            "symbol": pair.replace("/", ""),
+            "side": side.upper(),
+            "type": ordertype.upper(),
+            "quantity": f"{volume:.8f}",
+        }
+
+        if ordertype.lower() == "limit":
+            params["price"] = f"{price:.8f}"
+
+        if self.enable_trades:
+            res = await self._signed_request("POST", "/api/v3/order", params=params)
+        else:
+            res = {"orderId": f"simulated_{int(time.time())}"}
+
+        # The actual fill price is not returned immediately for market orders.
+        # We use the requested price for limit orders or fetch market price for market orders.
+        final_price = price
+        if ordertype.lower() == 'market':
+            final_price = await self.get_market_price(pair)
+
+        return {
+            "status": "open",
+            "order_id": res.get("orderId"),
+            "price": final_price,
+            "base_currency": base_currency,
+            "quote_currency": quote_currency
+        }
 
     async def _get_server_time(self) -> int:
         """Fetches the current server time from MEXC."""
@@ -82,60 +131,6 @@ class MexcTrader:
         except Exception as e:
             print(f"Error fetching MEXC market price for {pair}: {e}")
             return 1.0  # Fallback price
-
-    async def place_order(
-        self,
-        pair: str,
-        side: str,
-        volume: float,
-        ordertype: str,
-        price: Optional[float] = None,
-        telegram_channel: Optional[str] = None,
-        take_profit: Optional[float] = None,
-        stop_loss: Optional[float] = None,
-        targets: Optional[list] = None,
-        llm_response_id: Optional[int] = None,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Places an order on MEXC."""
-        base_currency, quote_currency = self._split_pair(pair)
-        params = {
-            "symbol": pair.replace("/", ""),
-            "side": side.upper(),
-            "type": ordertype.upper(),
-            "quantity": f"{volume:.8f}",  # Format volume to a string with precision
-        }
-
-        if ordertype.lower() == "limit":
-            if price is None:
-                raise ValueError("Price must be specified for limit orders.")
-            params["price"] = f"{price:.8f}"
-
-        if self.enable_trades:
-            res = await self._signed_request("POST", "/api/v3/order", params=params)
-        else:
-            # Simulate order placement
-            res = {"orderId": f"simulated_{int(time.time())}"}
-
-        trade_data = {
-            "base_currency": base_currency,
-            "quote_currency": quote_currency,
-            "volume": volume,
-            "price": price,
-            "ordertype": ordertype,
-            "telegram_channel": telegram_channel,
-            "status": "open",  # Assuming it's open, MEXC response might differ
-            "take_profit": take_profit,
-            "stop_loss": stop_loss,
-            "targets": targets if side.lower() == 'buy' else None,
-            "llm_response_id": llm_response_id,
-            **kwargs,
-        }
-
-        if side.lower() == "buy":
-            self.db.add_trade(trade_data)
-
-        return {"status": "success", "order_id": res.get("orderId"), **trade_data}
 
     def _split_pair(self, pair: str) -> tuple[str, str]:
         """Splits a trading pair string into base and quote currencies."""

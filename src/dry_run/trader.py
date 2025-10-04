@@ -1,9 +1,10 @@
 """Enhanced dry run trader with improved spot and futures support for auto-sell monitor."""
 from typing import Dict, Any, Optional
 import httpx
-from ..utils.exceptions import InsufficientBalanceError
-from ..database import TradingDatabase
+from src.utils.exceptions import InsufficientBalanceError
+from src.database import TradingDatabase
 from .wallet import VirtualWallet
+from src.utils.place_order import PlaceOrder
 
 
 class DryRunTrader:
@@ -12,20 +13,92 @@ class DryRunTrader:
     spot and futures support for the auto-sell monitor.
     """
 
-    def __init__(self, exchange: str = "KRAKEN", trading_mode: str = "SPOT",
-                 api_key: str = None, api_secret: str = None,
+    def __init__(self, exchange: str, trading_mode: str, db: TradingDatabase,
                  channel_configs: Dict[str, Dict[str, float]] = None):
         self.exchange = exchange.upper()
         self.trading_mode = trading_mode.upper()
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.db = TradingDatabase()
+        self.db = db
+        self.order_manager = PlaceOrder(db)
 
         # Initialize wallet with channel configurations
         self.wallet = VirtualWallet(self.db, channel_configs=channel_configs)
         self.wallet.reset()
 
         self._client = httpx.AsyncClient(timeout=15)
+
+    async def place_order(self, **kwargs) -> Optional[Dict[str, Any]]:
+        """
+        Public method to place an order, which delegates to the centralized PlaceOrder manager.
+        """
+        return await self.order_manager.execute(trader=self, **kwargs)
+
+    async def _execute_order(self, pair: str, side: str, volume: float, ordertype: str,
+                           price: Optional[float] = None, telegram_channel: Optional[str] = None,
+                           leverage: int = 0) -> Dict[str, Any]:
+        """
+        Simulate placing an order. This is the internal method called by the PlaceOrder manager.
+        """
+        # Auto-initialize channel wallet if it doesn't exist
+        if telegram_channel:
+            self.wallet.initialize_channel_if_needed(telegram_channel)
+
+        normalized_pair = self._normalize_pair_format(pair)
+
+        if telegram_channel:
+            balances = self.wallet.get_channel_balance(telegram_channel)
+            balance_source = f"channel '{telegram_channel}'"
+        else:
+            balances = self.wallet.get_balance()
+            balance_source = "global wallet"
+
+        base_currency, quote_currency = self._split_pair(normalized_pair)
+
+        if ordertype == "market" and price is None:
+            price = await self.get_market_price(normalized_pair)
+
+        cost = volume * (price or 0)
+
+        if self.trading_mode == "FUTURES":
+            leverage_used = leverage if leverage > 0 else 1
+            cost /= leverage_used
+            print(f"💰 Futures trade with {leverage_used}x leverage - Margin required: {cost:.2f} {quote_currency}")
+
+        print(f"💰 Using {balance_source} - Available balances: {balances}")
+
+        if side.lower() == "buy":
+            available_quote = balances.get(quote_currency, 0)
+            if available_quote < cost:
+                raise InsufficientBalanceError(
+                    f"Insufficient {quote_currency} in {balance_source} for the trade. "
+                    f"Need {cost:.2f}, have {available_quote:.2f}"
+                )
+            new_quote_balance = available_quote - cost
+            new_base_balance = balances.get(base_currency, 0) + volume
+        else:  # sell
+            available_base = balances.get(base_currency, 0)
+            if available_base < volume:
+                raise InsufficientBalanceError(
+                    f"Insufficient {base_currency} in {balance_source} for the trade. "
+                    f"Need {volume:.8f}, have {available_base:.8f}"
+                )
+            new_base_balance = available_base - volume
+            new_quote_balance = balances.get(quote_currency, 0) + cost
+
+        if telegram_channel:
+            self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
+            self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
+        else:
+            self.wallet.update_balance(quote_currency, new_quote_balance)
+            self.wallet.update_balance(base_currency, new_base_balance)
+
+        await self._record_wallet_snapshot(telegram_channel)
+
+        return {
+            "status": "simulated_open",
+            "price": price,
+            "base_currency": base_currency,
+            "quote_currency": quote_currency
+        }
 
     async def get_balance(self, channel: str = None, currency: str = None) -> Dict[str, float]:
         """
@@ -200,131 +273,13 @@ class DryRunTrader:
         except Exception as e:
             print(f"⚠️  Could not record wallet snapshot for '{channel}': {e}")
 
-    async def place_order(self, pair: str, side: str, volume: float, ordertype: str = "market",
-                          price: Optional[float] = None, telegram_channel: Optional[str] = None,
-                          take_profit: Optional[float] = None, stop_loss: Optional[float] = None,
-                          take_profit_target: Optional[int] = None, leverage: int = 0,
-                          targets: Optional[list] = None,
-                          llm_response_id: Optional[int] = None,
-                          llm_tp_reasoning: Optional[str] = None,
-                          **kwargs) -> Dict[str, Any]:
-        """
-        Simulate placing an order with enhanced spot/futures support.
-        """
-        # Auto-initialize channel wallet if it doesn't exist
-        if telegram_channel:
-            self.wallet.initialize_channel_if_needed(telegram_channel)
-
-        # Normalize pair format for API calls
-        normalized_pair = self._normalize_pair_format(pair)
-
-        # Get the appropriate balance (channel-specific or global)
-        if telegram_channel:
-            balances = self.wallet.get_channel_balance(telegram_channel)
-            balance_source = f"channel '{telegram_channel}'"
-        else:
-            balances = self.wallet.get_balance()
-            balance_source = "global wallet"
-
-        base_currency, quote_currency = self._split_pair(normalized_pair)
-
-        if ordertype == "market" and price is None:
-            price = await self.get_market_price(normalized_pair)
-
-        cost = volume * (price or 0)
-
-        # Apply leverage for futures trading
-        if self.trading_mode == "FUTURES":
-            # In futures, the cost is the margin, which is affected by leverage
-            leverage_used = leverage if leverage > 0 else 1
-            cost /= leverage_used
-            print(f"💰 Futures trade with {leverage_used}x leverage - Margin required: {cost:.2f} {quote_currency}")
-
-        print(f"💰 Using {balance_source} - Available balances: {balances}")
-
-        if side.lower() == "buy":
-            available_quote = balances.get(quote_currency, 0)
-            if available_quote < cost:
-                raise InsufficientBalanceError(
-                    f"Insufficient {quote_currency} in {balance_source} for the trade. "
-                    f"Need {cost:.2f}, have {available_quote:.2f}"
-                )
-
-            # Update balances
-            new_quote_balance = available_quote - cost
-            new_base_balance = balances.get(base_currency, 0) + volume
-
-            if telegram_channel:
-                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
-                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
-            else:
-                self.wallet.update_balance(quote_currency, new_quote_balance)
-                self.wallet.update_balance(base_currency, new_base_balance)
-
-            mode_info = f" ({self.trading_mode})" if self.trading_mode == "FUTURES" else ""
-            print(f"✅ BUY executed{mode_info}: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
-            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
-            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
-
-        elif side.lower() == "sell":
-            available_base = balances.get(base_currency, 0)
-            if available_base < volume:
-                raise InsufficientBalanceError(
-                    f"Insufficient {base_currency} in {balance_source} for the trade. "
-                    f"Need {volume:.8f}, have {available_base:.8f}"
-                )
-
-            # Update balances
-            new_base_balance = available_base - volume
-            new_quote_balance = balances.get(quote_currency, 0) + cost
-
-            if telegram_channel:
-                self.wallet.update_channel_balance(telegram_channel, base_currency, new_base_balance)
-                self.wallet.update_channel_balance(telegram_channel, quote_currency, new_quote_balance)
-            else:
-                self.wallet.update_balance(base_currency, new_base_balance)
-                self.wallet.update_balance(quote_currency, new_quote_balance)
-
-            mode_info = f" ({self.trading_mode})" if self.trading_mode == "FUTURES" else ""
-            print(f"✅ SELL executed{mode_info}: {volume:.8f} {base_currency} for {cost:.2f} {quote_currency}")
-            print(f"   New {base_currency} balance: {new_base_balance:.8f}")
-            print(f"   New {quote_currency} balance: {new_quote_balance:.2f}")
-
-        # Record the trade in database
-        trade_data = {
-            "base_currency": base_currency,
-            "quote_currency": quote_currency,
-            "side": side,
-            "volume": volume,
-            "price": price,
-            "ordertype": ordertype,
-            "telegram_channel": telegram_channel,
-            "status": "simulated_open",
-            "take_profit": take_profit,
-            "stop_loss": stop_loss,
-            "take_profit_target": take_profit_target,
-            "leverage": leverage if self.trading_mode == "FUTURES" else f"{leverage} dry",
-            "targets": targets if side.lower() == 'buy' else None,
-            "llm_response_id": llm_response_id,
-            "llm_tp_reasoning": llm_tp_reasoning,
-        }
-
-        if side.lower() == 'buy':
-            self.db.add_trade(trade_data)
-
-        # Record wallet snapshot after the trade
-        if telegram_channel:
-            await self._record_wallet_snapshot(telegram_channel)
-
-        return {"status": "simulated_open", **trade_data}
-
     def get_channel_performance_summary(self) -> Dict[str, Any]:
         """Get performance summary for all channels."""
         summary = {}
 
         # Get all unique channels
         self.db.cursor.execute("""
-            SELECT DISTINCT telegram_channel FROM wallet 
+            SELECT DISTINCT telegram_channel FROM wallet
             WHERE telegram_channel IS NOT NULL
         """)
         channels = [row[0] for row in self.db.cursor.fetchall()]
@@ -341,7 +296,8 @@ class DryRunTrader:
     async def close(self):
         """Close the database and client connections."""
         try:
+            await self._client.aclose()
             if hasattr(self.db, 'close'):
                 self.db.close()
         except Exception as e:
-            print(f"Warning: Error closing database connection: {e}")
+            print(f"Warning: Error closing connections: {e}")

@@ -70,7 +70,6 @@ class TradingApp:
             self.logger.info(" Gunning for T3: Static Take-Profit Selector is ENABLED")
 
         # Directly use the channel configurations from the settings file.
-        # This correctly loads and respects the CHANNEL_WALLET_CONFIGS from your .env file.
         if self.settings.DRY_RUN:
             self.channel_configs = self.settings.channel_wallet_configurations
         else:
@@ -87,7 +86,8 @@ class TradingApp:
             self.trader = DryRunTrader(
                 exchange=settings.EXCHANGE,
                 trading_mode=settings.TRADING_MODE,
-                channel_configs=self.channel_configs # Pass the correctly loaded configs
+                db=self.db,
+                channel_configs=self.channel_configs
             )
         else:
             self.logger.info(f"⚡ Starting in LIVE {self.settings.TRADING_MODE} mode on {self.settings.EXCHANGE}.")
@@ -131,7 +131,6 @@ class TradingApp:
         Ensure all channels from .env CHANNEL_WALLET_CONFIGS have initial wallet history.
         """
         try:
-            # Get channel configurations directly from settings
             channel_configs = self.settings.channel_wallet_configurations
 
             if not channel_configs:
@@ -142,40 +141,20 @@ class TradingApp:
 
             for channel_name, config in channel_configs.items():
                 try:
-                    # Skip template channels
                     if self._is_template_channel(channel_name):
                         continue
 
-                    # Check if wallet history exists for this channel
-                    self.db.cursor.execute("""
-                            SELECT COUNT(*) FROM wallet_history 
-                            WHERE channel_name = ?
-                        """, (channel_name,))
-
-                    existing_count = self.db.cursor.fetchone()[0]
-
-                    if existing_count == 0:
-                        # The 'config' variable is the initial balances dictionary
-                        initial_balances = config
-
-                        # Convert to USD equivalent (simplified, assumes USDT/USDC are 1:1 with USD)
-                        usd_value = 0.0
-                        for currency, amount in initial_balances.items():
-                            if currency.upper() in ['USD', 'USDT', 'USDC']:
-                                usd_value += amount
-                            # Note: a more complex calculation would fetch live prices for non-USD assets
-
+                    self.db.cursor.execute("SELECT COUNT(*) FROM wallet_history WHERE channel_name = ?", (channel_name,))
+                    if self.db.cursor.fetchone()[0] == 0:
+                        usd_value = sum(amount for currency, amount in config.items() if currency.upper() in ['USD', 'USDT', 'USDC'])
                         self.db.add_wallet_history_record(
                             channel_name=channel_name,
-                            total_value_usd=usd_value, # Use the calculated USD value
-                            balances=initial_balances
+                            total_value_usd=usd_value,
+                            balances=config
                         )
-
-                        self.logger.info(
-                            f"   ✅ Created initial wallet history for '{channel_name}': {initial_balances}")
+                        self.logger.info(f"   ✅ Created initial wallet history for '{channel_name}': {config}")
                     else:
-                        self.logger.info(
-                            f"   ℹ️  Wallet history exists for '{channel_name}' ({existing_count} records)")
+                        self.logger.info(f"   ℹ️ Wallet history exists for '{channel_name}'")
 
                 except Exception as e:
                     self.logger.error(f"❌ Error initializing wallet history for '{channel_name}': {e}")
@@ -188,25 +167,16 @@ class TradingApp:
         if not channel_name or channel_name == 'global':
             return False
         template_patterns = ['test_channel', 'example', 'template', 'demo']
-        channel_lower = str(channel_name)
-        return any(pattern in channel_lower for pattern in template_patterns)
+        return any(pattern in str(channel_name).lower() for pattern in template_patterns)
 
     async def on_message(self, message: str, channel: str):
         self.logger.info(f"Processing message from {channel}: {message[:100]}...")
-        llm_response_id = None  # Initialize here
+        llm_response_id = None
 
         try:
-            # The analyzer now handles its own DB logging and returns the ID
             parsed = await self.analyzer.analyze(message, channel)
             self.logger.info(f"Parsed signal: {parsed}")
-
-            if parsed and self.db:
-                # --- MODIFIED: Get ID from analyzer result, don't add a new record ---
-                llm_response_id = parsed.get("llm_response_id")
-                if llm_response_id:
-                    self.logger.info(f"✅ LLM response {llm_response_id} saved to database by analyzer.")
-                else:
-                    self.logger.warning("⚠️ Analyzer did not return an LLM response ID.")
+            llm_response_id = parsed.get("llm_response_id") if parsed else None
 
         except SignalParseError as e:
             self.logger.warning(f"Could not parse signal: {e}")
@@ -215,13 +185,12 @@ class TradingApp:
             self.logger.error(f"Unexpected error in signal analysis: {e}")
             return
 
-        if parsed is None:
+        if not parsed:
             self.logger.warning("Parsed signal is None, skipping.")
             return
 
-        conf = int(parsed.get("confidence", 0)) or 0
-        if conf < self.settings.MIN_CONFIDENCE_THRESHOLD:
-            self.logger.info(f"Signal confidence {conf} below threshold {self.settings.MIN_CONFIDENCE_THRESHOLD}")
+        if int(parsed.get("confidence", 0)) < self.settings.MIN_CONFIDENCE_THRESHOLD:
+            self.logger.info(f"Signal confidence below threshold")
             return
 
         if self.daily_trades >= self.settings.MAX_DAILY_TRADES:
@@ -230,38 +199,24 @@ class TradingApp:
 
         base = parsed.get("base_currency")
         quote = parsed.get("quote_currency") or "USDT"
-
         if not base:
             self.logger.warning("No base currency found in signal")
             return
 
         try:
             validated_pair_str, base, quote = await self.validator.validate_and_convert(base, quote)
-            self.logger.info(
-                f"Validated pair for {self.settings.EXCHANGE} ({self.settings.TRADING_MODE}): {validated_pair_str} ({base}/{quote})")
+            self.logger.info(f"Validated pair: {validated_pair_str}")
         except PairNotFoundError as e:
-            self.logger.warning(f"Pair not available on {self.settings.EXCHANGE}: {e}")
+            self.logger.warning(f"Pair not available: {e}")
             return
         except Exception as e:
             self.logger.error(f"Error validating pair: {e}")
             return
 
         try:
-            # Get channel-specific balance if in dry run mode
-            if self.settings.DRY_RUN:
-                balances = await self.trader.get_balance(channel)
-                balance_source = f"channel '{channel}'"
-
-                # Auto-initialize channel if it doesn't exist
-                if not balances:
-                    self.logger.info(f"🔧 Initializing wallet for new channel: {channel}")
-                    if hasattr(self.trader.wallet, 'initialize_channel_if_needed'):
-                        self.trader.wallet.initialize_channel_if_needed(channel)
-                        balances = await self.trader.get_balance(channel)
-            else:
-                balances = await self.trader.get_balance()
-                balance_source = f"{self.settings.EXCHANGE} account"
-
+            # Get balance
+            balances = await self.trader.get_balance(channel if self.settings.DRY_RUN else None)
+            balance_source = f"channel '{channel}'" if self.settings.DRY_RUN else f"{self.settings.EXCHANGE} account"
             self.logger.info(f"Current balances in {balance_source}: {balances}")
 
             side = "buy" if parsed.get("action").lower() == "buy" else "sell"
@@ -270,118 +225,82 @@ class TradingApp:
 
             if side == "buy":
                 volume = await self._calculate_buy_volume(parsed, balances, quote, validated_pair_str)
-                if volume <= 0:
-                    return
-
-            else:  # side == "sell"
-                sell_result_tuple = (None, None)
-                if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE:
-                    sell_result_tuple = await self._handle_auto_monitored_sell(parsed, channel, base, quote,
-                                                                               validated_pair_str, balances)
-                else:
-                    sell_result_tuple = await self._handle_manual_sell(parsed, channel, base, quote, validated_pair_str,
-                                                                       balances)
-
-                volume, original_buy_trade_id = sell_result_tuple
-
+                if volume <= 0: return
+            else:  # sell
+                handler = self._handle_auto_monitored_sell if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE else self._handle_manual_sell
+                volume, original_buy_trade_id = await handler(parsed, channel, base, quote, validated_pair_str, balances)
                 if not volume or volume <= 0:
                     self.logger.warning("Sell conditions not met or volume is zero. Skipping sell order.")
                     return
 
-            entry = parsed.get("entry_price")
-            if entry is None and parsed.get("entry_price_range"):
-                entry = sum(parsed.get("entry_price_range")) / 2.0
+            # --- Take-Profit Logic ---
+            take_profit, take_profit_target, llm_tp_reasoning = await self._determine_take_profit(parsed, side)
 
-            stop_loss = parsed.get("stop_loss")
-            take_profit_targets = parsed.get("targets")
-
-            # --- DYNAMIC/STATIC TAKE-PROFIT LOGIC ---
-            take_profit = None
-            take_profit_target = None
-            llm_tp_reasoning = None
-
-            if take_profit_targets:
-                # Use the LLM manager if it's enabled and we are placing a BUY order
-                if side == "buy" and self.tp_manager:
-                    self.logger.info("🤖 Using LLM to select the best take-profit target...")
-                    take_profit, take_profit_target, llm_tp_reasoning = await self.tp_manager.select_best_target(parsed)
-
-                    if take_profit is not None:
-                        self.logger.info(
-                            f"   🧠 LLM Chose Target #{take_profit_target + 1} ({take_profit}). Reason: {llm_tp_reasoning}")
-                    else:
-                        self.logger.warning("   ⚠️ LLM TP selection failed, falling back to static logic.")
-
-                # Fallback to static logic if manager is disabled, failed, or it's a sell signal
-                if take_profit is None:
-                    if len(take_profit_targets) >= 3:
-                        take_profit = take_profit_targets[-3]
-                        take_profit_target = len(take_profit_targets) - 3
-                        if side == "buy":  # Only set reasoning for buy orders
-                            llm_tp_reasoning = "Static Fallback: Chose third to last target for balance."
-                    elif take_profit_targets:
-                        take_profit = take_profit_targets[-1]
-                        take_profit_target = 0
-                        if side == "buy":
-                            llm_tp_reasoning = "Static Fallback: Chose the final target."
-            # --- END TAKE-PROFIT LOGIC ---
-
-            # Futures Specific Logic
-            leverage = 0
-            if self.settings.TRADING_MODE.upper() == "FUTURES":
-                leverage_str = parsed.get("leverage")
-                if leverage_str:
-                    leverage_digits = re.search(r'(\d+)', str(leverage_str))
-                    if leverage_digits:
-                        leverage = int(leverage_digits.group(1))
-                        self.logger.info(f"Extracted leverage from signal: {leverage}x")
-
+            leverage = self._extract_leverage(parsed)
             targets_for_trade = parsed.get("targets")
 
-            self.logger.info(f"Placing order: {side} {volume:.6f} {validated_pair_str} at {entry} from {channel}")
-            self.logger.info(
-                f"SL: {stop_loss}, TP: {take_profit} (Target Index: {take_profit_target}), Leverage: {leverage or 'Default'}x")
-            self.logger.info(f"💰 Using balance from: {balance_source}")
-
-            # Place the order (leverage & reasoning kwargs will be safely ignored by spot traders)
+            # The new PlaceOrder class will handle logging, so we pass all relevant data
             res = await self.trader.place_order(
                 pair=validated_pair_str,
                 side=side,
                 volume=volume,
-                ordertype=("limit" if entry else "market"),
-                price=entry,
+                ordertype=("limit" if parsed.get("entry_price") else "market"),
+                price=parsed.get("entry_price"),
                 telegram_channel=channel,
                 take_profit=take_profit,
-                stop_loss=stop_loss,
+                stop_loss=parsed.get("stop_loss"),
                 take_profit_target=take_profit_target,
                 leverage=leverage,
                 targets=targets_for_trade,
                 llm_response_id=llm_response_id,
-                llm_tp_reasoning=llm_tp_reasoning
+                llm_tp_reasoning=llm_tp_reasoning,
+                original_buy_trade_id=original_buy_trade_id # Pass this for the sell logic
             )
 
-            self.logger.info(f"Order result: {res}")
-            self.daily_trades += 1
-
-            # If this was a successful sell, close the original buy trade
-            if side == "sell" and original_buy_trade_id is not None:
-                if res and res.get('price') is not None:
-                    close_price = res.get('price')
-                    self.db.update_trade_status(original_buy_trade_id, 'closed', close_price=close_price)
-                    self.logger.info(
-                        f"✅ Original BUY trade (ID: {original_buy_trade_id}) has been marked as 'closed' at price {close_price}.")
-                elif res:
-                    self.db.update_trade_status(original_buy_trade_id, 'closed')
-                    self.logger.warning(
-                        f"⚠️ Sell order may have succeeded but price was not returned. Original BUY trade (ID: {original_buy_trade_id}) was marked 'closed' without profit calculation.")
-                else:
-                    self.logger.warning(
-                        f"⚠️ Sell order may have failed. Original BUY trade (ID: {original_buy_trade_id}) was NOT closed.")
+            if res:
+                self.logger.info(f"Order placement result: {res}")
+                if side == "buy":
+                    self.daily_trades += 1
+            else:
+                self.logger.error("Order placement failed. Check logs for details.")
 
         except InsufficientBalanceError as e:
             self.logger.warning(f"Insufficient balance to place order: {e}")
         except Exception as e:
-            self.logger.exception(f"Order failed: {e}")
+            self.logger.exception(f"Order processing failed: {e}")
+
+    async def _determine_take_profit(self, parsed, side):
+        """Determine the take-profit price, target index, and reasoning."""
+        targets = parsed.get("targets")
+        if not targets:
+            return None, None, None
+
+        if side == "buy" and self.tp_manager:
+            self.logger.info("🤖 Using LLM to select the best take-profit target...")
+            tp_price, tp_idx, reason = await self.tp_manager.select_best_target(parsed)
+            if tp_price is not None:
+                self.logger.info(f"   🧠 LLM Chose Target #{tp_idx + 1} ({tp_price}). Reason: {reason}")
+                return tp_price, tp_idx, reason
+            self.logger.warning("   ⚠️ LLM TP selection failed, falling back to static logic.")
+
+        # Static fallback logic
+        if len(targets) >= 3:
+            return targets[-3], len(targets) - 3, "Static Fallback: Chose third to last target."
+        return targets[-1], 0, "Static Fallback: Chose the final target."
+
+    def _extract_leverage(self, parsed):
+        """Extracts leverage from the parsed signal."""
+        if self.settings.TRADING_MODE.upper() != "FUTURES":
+            return 0
+        leverage_str = parsed.get("leverage")
+        if leverage_str:
+            match = re.search(r'(\d+)', str(leverage_str))
+            if match:
+                leverage = int(match.group(1))
+                self.logger.info(f"Extracted leverage from signal: {leverage}x")
+                return leverage
+        return 0
+
     async def _calculate_buy_volume(self, parsed, balances, quote, validated_pair_str):
         """Calculate volume for buy orders."""
         quote_balance = balances.get(quote, 0.0)
@@ -478,78 +397,55 @@ class TradingApp:
         """
         buy_price = last_buy_trade['price']
 
-        # Profit check
         if buy_price and current_market_price:
             profit_percentage = ((current_market_price - buy_price) / buy_price) * 100
-
-            self.logger.info(f"   Buy price: {buy_price:.8f} {quote}")
-            self.logger.info(f"   Current price: {current_market_price:.8f} {quote}")
             self.logger.info(f"   Profit: {profit_percentage:.2f}%")
         else:
-            self.logger.warning(f"⚠️  Could not determine profit/loss - missing price data")
-            self.logger.warning(f"🚫 SELL BLOCKED - Cannot verify profitability")
+            self.logger.warning(f"⚠️ Could not determine profit/loss - missing price data")
             return None
 
-        # Use the volume from the last buy trade
-        volume = last_buy_trade['volume']
-
-        # The `balances` dict is now passed directly, representing either the
-        # live exchange balance (when DRY_RUN=false) or the channel-specific
-        # dry-run balance. This avoids a redundant API call.
+        # Ensure we sell the exact volume we bought to close the position
+        volume_to_sell = last_buy_trade['volume']
         base_balance = balances.get(base, 0.0)
 
-        self.logger.info(f"Found last BUY trade for {base}: volume={volume:.8f}, current balance={base_balance:.8f}")
+        self.logger.info(f"Required sell volume: {volume_to_sell:.8f}, current balance: {base_balance:.8f}")
 
-        # Check if we have enough balance to sell
-        if base_balance < volume:
-            self.logger.warning(f"Insufficient {base} balance to sell {volume:.8f}. Available: {base_balance:.8f}. Will sell available amount.")
-            volume = base_balance
-
-        if volume <= 0:
-            self.logger.warning(f"No {base} available to sell. Skipping.")
+        # CRITICAL: Check if we have enough balance to fully close the trade.
+        # Add a small tolerance (0.1%) for floating point precision issues.
+        if base_balance < (volume_to_sell * 0.999):
+            self.logger.error(f"CRITICAL: Insufficient {base} balance to close the trade. "
+                              f"Expected to sell {volume_to_sell:.8f}, but only have {base_balance:.8f}. "
+                              f"Manual intervention may be required. Skipping automated sell.")
             return None
 
-        self.logger.info(f"Setting SELL order volume to match last BUY: {volume:.8f} {base}")
-        return volume
+        self.logger.info(f"Setting SELL order volume to match last BUY: {volume_to_sell:.8f} {base}")
+        return volume_to_sell
 
     async def run(self):
         self.logger.info("Starting trading application...")
         self.logger.info(f"Settings: MODE={self.settings.TRADING_MODE}, EXCHANGE={self.settings.EXCHANGE}, DRY_RUN={self.settings.DRY_RUN}")
         self.logger.info(f"Channels={self.settings.target_channels}, Max daily BUY trades={self.settings.MAX_DAILY_TRADES}")
 
-        # Log auto-sell monitor status
         if self.settings.AUTO_SELL_MONITOR:
-            if AUTO_SELL_AVAILABLE and self.auto_sell_monitor:
-                self.logger.info(f"🤖 Auto Sell Monitor: ENABLED")
-                self.logger.info(f"   📊 Will monitor open trades every 5 minutes")
-                self.logger.info(f"   💰 Manual sells will be filtered through SellDecisionManager")
-            else:
-                self.logger.warning(f"⚠️ Auto Sell Monitor: REQUESTED but NOT AVAILABLE")
-                self.logger.info(f"   📱 Using current manual sell logic as fallback")
+            status = "ENABLED" if AUTO_SELL_AVAILABLE and self.auto_sell_monitor else "REQUESTED but NOT AVAILABLE"
+            self.logger.info(f"🤖 Auto Sell Monitor: {status}")
         else:
-            self.logger.info(f"📱 Auto Sell Monitor: DISABLED - using current manual sell logic")
+            self.logger.info(f"📱 Auto Sell Monitor: DISABLED")
 
         if self.settings.DRY_RUN:
-            self.logger.info(f"💰 Channel-specific wallets initialized with configurations:")
-            for channel, config in self.channel_configs.items():
-                currencies = [f"{amount} {currency}" for currency, amount in config.items()]
-                self.logger.info(f"   📺 {channel}: {', '.join(currencies)}")
+            self.logger.info(f"💰 Channel-specific wallets initialized.")
 
         if not self.settings.DRY_RUN:
             self.logger.info(f"Performing initial balance sync from {self.settings.EXCHANGE}...")
             try:
                 live_balances = await self.trader.get_balance()
-
-                # Create a specific channel name for the live exchange wallet
                 live_wallet_channel_name = f"{self.settings.EXCHANGE.upper()} (Live)"
                 self.db.sync_wallet(live_balances, channel=live_wallet_channel_name)
-                self.logger.info(f"✅ Live wallet balances for '{live_wallet_channel_name}' synced with local database.")
+                self.logger.info(f"✅ Live wallet balances synced with local database.")
             except Exception as e:
-                self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances from {self.settings.EXCHANGE}: {e}")
-                self.logger.error("   Please check your API keys and network connection. Exiting.")
+                self.logger.error(f"❌ CRITICAL: Failed to sync wallet balances: {e}")
                 return
 
-        # Start auto-sell monitor if enabled and available
         auto_sell_task = None
         if self.settings.AUTO_SELL_MONITOR and AUTO_SELL_AVAILABLE and self.auto_sell_monitor:
             self.logger.info("🚀 Starting Auto Sell Monitor in background...")
@@ -560,15 +456,9 @@ class TradingApp:
         except Exception as e:
             self.logger.exception(f"Error starting telegram monitor: {e}")
         finally:
-            # Stop auto-sell monitor if it was started
             if auto_sell_task and self.auto_sell_monitor:
                 self.logger.info("🛑 Stopping Auto Sell Monitor...")
                 await self.auto_sell_monitor.stop_monitoring()
-                auto_sell_task.cancel()
-                try:
-                    await auto_sell_task
-                except asyncio.CancelledError:
-                    pass
 
 
 if __name__ == "__main__":

@@ -164,8 +164,24 @@ class DefaultAnalyzer(AbstractAnalyzer):
                 parsed_data = json.loads(content)
 
                 # Validate required fields
-                if not parsed_data.get("action") or not parsed_data.get("base_currency"):
+                # 1. Validate required fields
+                action = parsed_data.get("action")
+                base_currency = parsed_data.get("base_currency")
+                if not action or not base_currency:
+                    print(f"LLM response missing required fields (action or base_currency). Response: {content}")
                     return None
+
+                # 2. Sanity check numeric values
+                for key in ["entry", "stop_loss"]:
+                    value = parsed_data.get(key)
+                    if value:
+                        try:
+                            if float(value) <= 0:
+                                print(f"LLM returned non-positive value for {key}. Response: {content}")
+                                return None
+                        except (ValueError, TypeError):
+                            print(f"LLM returned invalid numeric value for {key}. Response: {content}")
+                            return None
 
                 # Add metadata to the parsed data before updating the DB
                 parsed_data['raw_response'] = content

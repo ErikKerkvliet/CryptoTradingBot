@@ -10,20 +10,67 @@ import httpx
 
 from .database import TradingDatabase
 from .utils.exceptions import InsufficientBalanceError
-
 from config.settings import settings
+from src.utils.place_order import PlaceOrder
 
 class KrakenTrader:
     """Handles live trading operations on Kraken."""
 
     BASE_URL = "https://api.kraken.com"
+    exchange = "KRAKEN" # For logging purposes
 
     def __init__(self, api_key: str, api_secret: str, db: TradingDatabase):
         self.api_key = api_key
         self.api_secret = api_secret
         self.db = db
         self.enable_trades = getattr(settings, 'ENABLE_TRADES', False)
+        self.order_manager = PlaceOrder(db)
         self._client = httpx.AsyncClient(timeout=15)
+
+    async def place_order(self, **kwargs) -> Optional[Dict[str, Any]]:
+        """
+        Public method to place an order, delegating to the centralized PlaceOrder manager.
+        """
+        return await self.order_manager.execute(trader=self, **kwargs)
+
+    async def _execute_order(
+        self,
+        pair: str,
+        side: str,
+        volume: float,
+        ordertype: str,
+        price: Optional[float] = None,
+        **kwargs, # Absorb unused kwargs
+    ) -> Dict[str, Any]:
+        """
+        Places an order on Kraken. This is the internal method called by the PlaceOrder manager.
+        """
+        base_currency, quote_currency = pair.split("/")
+        params = {
+            "pair": pair,
+            "type": side.lower(),
+            "ordertype": ordertype.lower(),
+            "volume": f"{volume:.8f}",
+        }
+
+        if ordertype.lower() == "limit" and price:
+            params["price"] = f"{price:.8f}"
+
+        if self.enable_trades:
+            res = await self._signed_request("/0/private/AddOrder", params)
+        else:
+            # Simulate order placement
+            res = {"txid": [f"simulated_{int(time.time())}"]}
+
+        # Kraken doesn't return the fill price on order creation, so we use the requested price.
+        # A more advanced system would poll the order status to get the actual fill price.
+        return {
+            "status": "open",
+            "order_id": res.get("txid", [None])[0],
+            "price": price,
+            "base_currency": base_currency,
+            "quote_currency": quote_currency
+        }
 
     async def _get_kraken_signature(self, url_path: str, data: Dict[str, Any]) -> str:
         """Signs the request."""
@@ -85,64 +132,6 @@ class KrakenTrader:
         except Exception as e:
             print(f"Error fetching Kraken market price for {pair}: {e}")
             return 1.0  # Fallback price
-
-    async def place_order(
-        self,
-        pair: str,
-        side: str,
-        volume: float,
-        ordertype: str,
-        price: Optional[float] = None,
-        telegram_channel: Optional[str] = None,
-        take_profit: Optional[float] = None,
-        stop_loss: Optional[float] = None,
-        targets: Optional[list] = None,
-        llm_response_id: Optional[int] = None,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        """Places an order on Kraken."""
-        base_currency, quote_currency = pair.split("/")
-        params = {
-            "pair": pair,
-            "type": side.lower(),
-            "ordertype": ordertype.lower(),
-            "volume": f"{volume:.8f}",
-        }
-
-        if ordertype.lower() == "limit" and price:
-            params["price"] = f"{price:.8f}"
-
-        if take_profit:
-            params["price2"] = f"{take_profit:.8f}" # Price2 is used for take profit orders
-
-        if stop_loss:
-            params["stop-loss-price"] = f"{stop_loss:.8f}"
-
-        if self.enable_trades:
-            res = await self._signed_request("/0/private/AddOrder", params)
-        else:
-            # Simulate order placement
-            res = {"txid": [f"simulated_{int(time.time())}"]}
-
-        trade_data = {
-            "base_currency": base_currency,
-            "quote_currency": quote_currency,
-            "volume": volume,
-            "price": price,
-            "ordertype": ordertype,
-            "telegram_channel": telegram_channel,
-            "status": "open",
-            "take_profit": take_profit,
-            "stop_loss": stop_loss,
-            "targets": targets if side.lower() == 'buy' else None,
-            "llm_response_id": llm_response_id,
-            **kwargs,
-        }
-
-        if side.lower() == 'buy':
-            self.db.add_trade(trade_data)
-
-        return {"status": "success", "txid": res.get("txid"), **trade_data}
 
     async def close(self):
         """Closes the HTTP client session."""
