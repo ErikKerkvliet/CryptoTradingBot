@@ -215,7 +215,11 @@ class TradingApp:
 
         try:
             # Get balance
-            balances = await self.trader.get_balance(channel if self.settings.DRY_RUN else None)
+            if self.setings.DRY_RUN:
+                balances = await self.trader.get_balance(channel)
+            else:
+                balances = await self.trader.get_balance()
+
             balance_source = f"channel '{channel}'" if self.settings.DRY_RUN else f"{self.settings.EXCHANGE} account"
             self.logger.info(f"Current balances in {balance_source}: {balances}")
 
