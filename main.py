@@ -215,7 +215,7 @@ class TradingApp:
 
         try:
             # Get balance
-            if self.setings.DRY_RUN:
+            if self.settings.DRY_RUN:
                 balances = await self.trader.get_balance(channel)
             else:
                 balances = await self.trader.get_balance()

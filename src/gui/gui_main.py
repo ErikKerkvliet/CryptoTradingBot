@@ -553,13 +553,13 @@ class TradingBotGUI:
 
         # Define the correct columns and their widths
         trades_columns = [
-            'ID', 'Timestamp', 'Channel', 'Pair', 'Volume', 'Entry Price', 'Close Price',
+            'ID', 'Timestamp', 'Channel', 'Pair', 'Volume', 'Entry', 'Close',
             'Leverage', 'Targets', 'Stop Loss', 'Profit', 'Status'
         ]
 
         column_widths = {
             'ID': 20, 'Timestamp': 120, 'Channel': 100, 'Pair': 50,
-            'Volume': 100, 'Entry Price': 60, 'Close Price': 60, 'Leverage': 60, 'Targets': 170,
+            'Volume': 100, 'Entry': 60, 'Close': 60, 'Leverage': 60, 'Targets': 170,
             'Stop Loss': 60, 'Profit': 60, 'Status': 100,
         }
 
